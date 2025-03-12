@@ -15,12 +15,13 @@ import (
 
 // DAO interface, contains basic CRUD functions
 type DAO interface {
-    Create(any) any
-    Read(any) any
-    Update(any) any
-    Delete(any) any
-    Connect() any
-    Disconnect() any
+    Create(Document) error
+    Read(Document, uuid.UUID) (Document,error)
+    Update(Document) error
+    Delete(uuid.UUID) error
+    // TODO: this needs it's params abstracted out into a class, to maintain inheritance.
+    Connect() error
+    Disconnect() error
 }
 
 // BoltDAO struct, with realised methods from the DAO interface
@@ -163,8 +164,8 @@ type MetaData struct {
 //---------------------DOCUMENT----------------------
 //---------------------------------------------------
 
-// placeholder methods, likely only need getContent, as the others
-// are struct vars.
+// over-arching interface to cover all subsequent document types,
+// supports some quality of life methods, and getting/setting metadata and content.
 type Document interface {
     GetTitle() string
     GetMetaData() MetaData

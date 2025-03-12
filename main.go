@@ -29,28 +29,41 @@ func main() {
         FileType:    "md",
         Uuid:        uuid.New(),
     }
-    var doc dao.Document = &dao.Notes{}
+    // instantiate a Document interface
+    var doc dao.Document
+
+    // create concrete Notes struct
     note := dao.Notes{
         Title:    "test",
         Metadata: meta,
         Content:  "THIS IS A TEST DOCUMENT, AAAAAAAAAAA",
     }
+
+    // assign reference of concrete struct to the Document interface
     doc = &note
+
+    // check that it actually worked
     fmt.Println(doc.GetTitle())
     fmt.Println(doc.GetMetaData())
     fmt.Println(doc.GetContent())
     fmt.Println(doc.GetID().String())
 
+    // insert record into db
     err = db.Create(doc)
     if err != nil {
         fmt.Println(err)
     }
+
+    // create empty Notes Document record
     var res dao.Document = &dao.Notes{}
 
-    res,err = db.Read(&res,meta.Uuid)
+    // read from the DB, with the provided UUID
+    res, err = db.Read(&res, meta.Uuid)
     if err != nil {
         fmt.Println(err.Error())
     }
+
+    // check it even worked
     fmt.Println(res.GetMetaData())
 
 }
