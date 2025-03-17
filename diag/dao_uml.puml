@@ -1,0 +1,76 @@
+@startuml
+namespace dao {
+    class BoltConnectionParams << (S,Aquamarine) >> {
+        - path string
+        - mode fs.FileMode
+        - opts *bolt.Options
+
+        - getParams() any
+
+    }
+    class BoltDao << (S,Aquamarine) >> {
+        - db *bolt.DB
+
+        + Create(doc Document) error
+        + SearchByKeyValue(key string, value string) ([]MetaData, error)
+        + Read(doc *Document, id uuid.UUID) (Document, error)
+        + Update(doc Document) error
+        + Delete(id uuid.UUID) error
+        + Connect(cp ConnectParams) error
+        + Disconnect() error
+
+    }
+    interface ConnectParams  {
+        - getParams() any
+
+    }
+    interface DAO  {
+        + Create( Document) error
+        + Read( *Document,  uuid.UUID) (Document, error)
+        + SearchByKeyValue(key string, value string) ([]MetaData, error)
+        + Update( Document) error
+        + Delete( uuid.UUID) error
+        + Connect( ConnectParams) error
+        + Disconnect() error
+
+    }
+    interface Document  {
+        + GetTitle() string
+        + SetTitle( string) error
+        + GetMetaData() MetaData
+        + SetMetaData( MetaData) error
+        + GetContent() any
+        + SetContent( any) error
+        + GetID() uuid.UUID
+
+    }
+    class MetaData << (S,Aquamarine) >> {
+        + Title string
+        + Author string
+        + PublishDate string
+        + LastUpdated string
+        + FileType string
+        + Uuid uuid.UUID
+
+    }
+    class Notes << (S,Aquamarine) >> {
+        + Title string
+        + Metadata MetaData
+        + Content string
+
+        + GetTitle() string
+        + SetTitle(title string) error
+        + GetMetaData() MetaData
+        + SetMetaData(meta MetaData) error
+        + GetContent() any
+        + SetContent(content any) error
+        + GetID() uuid.UUID
+
+    }
+}
+
+"dao.ConnectParams" <|-- "dao.BoltConnectionParams"
+"dao.DAO" <|-- "dao.BoltDao"
+"dao.Document" <|-- "dao.Notes"
+
+@enduml
