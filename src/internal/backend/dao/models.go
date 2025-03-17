@@ -37,11 +37,12 @@ type BoltConnectionParams struct {
     mode fs.FileMode
     opts *bolt.Options
 }
+
 // TODO: fix this dumpster fire of a design decision
 // this is nightmare fuel, and needs a more elegant solution -
 // perhaps interface/concrete isn't necessarily the right tool for the job?
 func (bcp BoltConnectionParams) getParams() any {
- return bcp
+    return bcp
 }
 
 // BoltDAO struct, with realised methods from the DAO interface
@@ -206,7 +207,7 @@ func (b *BoltDao) Delete(id uuid.UUID) error {
 func (b *BoltDao) Connect(cp ConnectParams) error {
     // Open the my.db data file in your current directory.
     // It will be created if it doesn't exist.
-    params,ok := cp.getParams().(BoltConnectionParams)
+    params, ok := cp.getParams().(BoltConnectionParams)
     if !ok {
         return fmt.Errorf("connection parameters do not conform to BoltConnectionParams type.")
     }

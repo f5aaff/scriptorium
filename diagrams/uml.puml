@@ -73,4 +73,35 @@ namespace dao {
 "dao.DAO" <|-- "dao.BoltDao"
 "dao.Document" <|-- "dao.Notes"
 
+namespace service {
+    class APIHandler << (S,Aquamarine) >> {
+        + DaoService DaoService
+
+        + SearchByKeyValue(c *gin.Context) 
+        + Create(c *gin.Context) 
+        + Read(c *gin.Context) 
+        + Update(c *gin.Context) 
+        + Delete(c *gin.Context) 
+
+    }
+    class DaoService << (S,Aquamarine) >> {
+        - dao dao.DAO
+
+        + SearchByKeyValue(key string, value string) ([]dao.MetaData, error)
+        + Connect(params dao.ConnectParams) error
+        + Disconnect() error
+        + Create(doc dao.Document) error
+        + Read(doc *dao.Document, uuid uuid.UUID) (dao.Document, error)
+        + Update(doc dao.Document) error
+        + Delete(id uuid.UUID) error
+
+    }
+    class RequestBody << (S,Aquamarine) >> {
+        + Udid string
+
+    }
+}
+
+"dao.DAO" <|-- "service.DaoService"
+
 @enduml
