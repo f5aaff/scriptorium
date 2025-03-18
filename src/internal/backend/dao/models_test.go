@@ -80,7 +80,7 @@ func TestWhenCreateTableExpectTable(t *testing.T) {
         PublishDate: "right now",
         LastUpdated: "right now",
         FileType:    "md",
-        Uuid:        uuid.New(),
+        Uuid:        uuid.New().String(),
     }
     // instantiate a Document interface
     var doc Document
@@ -135,7 +135,7 @@ func TestWhenCreateRecordExpectRecord(t *testing.T) {
         PublishDate: "right now",
         LastUpdated: "right now",
         FileType:    "md",
-        Uuid:        uuid.New(),
+        Uuid:        uuid.New().String(),
     }
     // instantiate a Document interface
     var doc Document
@@ -163,7 +163,7 @@ func TestWhenCreateRecordExpectRecord(t *testing.T) {
         }
 
         // get by UUID
-        data := bucket.Get([]byte(doc.GetID().String()))
+        data := bucket.Get([]byte(doc.GetID()))
         if data == nil {
             return fmt.Errorf("docment not found")
         }
@@ -176,7 +176,7 @@ func TestWhenCreateRecordExpectRecord(t *testing.T) {
         t.Errorf("error retrieving document: %s", err)
     }
 
-    if resMeta.Uuid.String() != meta.Uuid.String() {
+    if resMeta.Uuid != meta.Uuid {
         t.Error("UUIDs do not match")
     }
 }
@@ -202,7 +202,7 @@ func TestWhenSearchByKeyValueExpectRecords(t *testing.T) {
         PublishDate: "right now",
         LastUpdated: "right now",
         FileType:    "md",
-        Uuid:        uuid.New(),
+        Uuid:        uuid.New().String(),
     }
     // instantiate a Document interface
     var doc Document
@@ -286,7 +286,7 @@ func TestWhenDeleteRecordExpectDeletedRecord(t *testing.T) {
         PublishDate: "right now",
         LastUpdated: "right now",
         FileType:    "md",
-        Uuid:        uuid.New(),
+        Uuid:        uuid.New().String(),
     }
     // instantiate a Document interface
     var doc Document
@@ -308,8 +308,11 @@ func TestWhenDeleteRecordExpectDeletedRecord(t *testing.T) {
     }
 
     var d Document = &Notes{}
-
-    _, err = db.Read(&d, doc.GetID())
+    uuid,err := uuid.Parse(doc.GetID())
+    if err != nil {
+        t.Errorf("error parsing UUID: %s",err)
+    }
+    _, err = db.Read(&d, uuid)
     if err == nil {
         t.Errorf("document found, deletion failed")
     }

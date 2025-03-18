@@ -14,6 +14,7 @@ namespace dao {
         + Connect(cp ConnectParams) error
         + Disconnect() error
         + Create(doc Document) error
+        + ReadRaw(id uuid.UUID) ([]byte, error)
         + Read(doc *Document, id uuid.UUID) (Document, error)
         + Update(doc Document) error
         + Delete(id uuid.UUID) error
@@ -27,6 +28,7 @@ namespace dao {
     interface DAO  {
         + Create( Document) error
         + Read( *Document,  uuid.UUID) (Document, error)
+        + ReadRaw( uuid.UUID) ([]byte, error)
         + SearchByKeyValue(key string, value string) ([]MetaData, error)
         + Update( Document) error
         + Delete( uuid.UUID) error
@@ -39,9 +41,14 @@ namespace dao {
         + SetTitle( string) error
         + GetMetaData() MetaData
         + SetMetaData( MetaData) error
-        + GetContent() any
-        + SetContent( any) error
-        + GetID() uuid.UUID
+        + GetID() string
+
+    }
+    class DocumentFactory << (S,Aquamarine) >> {
+        - registry <font color=blue>map</font>[string]DocumentFactoryFunc
+
+        + RegisterDocumentType(docType string, factory DocumentFactoryFunc) 
+        + NewDocument(docType string) (Document, error)
 
     }
     class MetaData << (S,Aquamarine) >> {
@@ -50,7 +57,9 @@ namespace dao {
         + PublishDate string
         + LastUpdated string
         + FileType string
-        + Uuid uuid.UUID
+        + DocType string
+        + Path string
+        + Uuid string
 
     }
     class Notes << (S,Aquamarine) >> {
@@ -64,8 +73,10 @@ namespace dao {
         + SetMetaData(meta MetaData) error
         + GetContent() any
         + SetContent(content any) error
-        + GetID() uuid.UUID
+        + GetID() string
 
+    }
+    class dao.DocumentFactoryFunc << (T, #FF7700) >>  {
     }
 }
 
@@ -76,6 +87,7 @@ namespace dao {
 namespace service {
     class APIHandler << (S,Aquamarine) >> {
         + DaoService DaoService
+        + DocumentFactory *dao.DocumentFactory
 
         + GetService() any
         + SearchByKeyValue(c *gin.Context) 
@@ -89,12 +101,13 @@ namespace service {
     class DaoService << (S,Aquamarine) >> {
         - dao dao.DAO
 
-        + New(d any) any
+        + New(d any) (Service, error)
         + SearchByKeyValue(key string, value string) ([]dao.MetaData, error)
         + Connect(params dao.ConnectParams) error
         + Disconnect() error
         + Create(doc dao.Document) error
         + Read(doc *dao.Document, uuid uuid.UUID) (dao.Document, error)
+        + ReadRaw(uuid uuid.UUID) ([]byte, error)
         + Update(doc dao.Document) error
         + Delete(id uuid.UUID) error
 
@@ -109,7 +122,7 @@ namespace service {
 
     }
     interface Service  {
-        + New( any) any
+        + New( any) (Service, error)
 
     }
 }
@@ -118,4 +131,5 @@ namespace service {
 "dao.DAO" <|-- "service.DaoService"
 "service.Service" <|-- "service.DaoService"
 
+"dao.<font color=blue>func</font>() Document" #.. "dao.DocumentFactoryFunc"
 @enduml

@@ -8,7 +8,7 @@ import (
 )
 
 type Service interface {
-    New(any) any
+    New(any) (Service,error)
 }
 
 //---------------------------------------------------
@@ -22,12 +22,14 @@ type DaoService struct {
     dao dao.DAO
 }
 
-func (ds *DaoService) New(d any) any {
-    dao, ok := d.(dao.DAO)
+func (ds DaoService) New(d any) (Service,error) {
+    dao,ok := d.(dao.DAO)
     if !ok {
-        return fmt.Errorf("not a DAO")
+        return nil,fmt.Errorf("d is not a valid DAO")
     }
-    return &DaoService{dao: dao}
+
+    daos := DaoService{dao: dao}
+    return daos,nil
 }
 
 func (ds *DaoService) SearchByKeyValue(key, value string) ([]dao.MetaData, error) {
@@ -49,11 +51,14 @@ func (ds *DaoService) Disconnect() error {
 func (ds *DaoService) Create(doc dao.Document) error {
     return ds.dao.Create(doc)
 }
-
+// basically defunct until I can somehow wrangle this to work
 func (ds *DaoService) Read(doc *dao.Document, uuid uuid.UUID) (dao.Document, error) {
     return ds.dao.Read(doc, uuid)
 }
 
+func (ds *DaoService) ReadRaw(uuid uuid.UUID) ([]byte, error) {
+    return ds.dao.ReadRaw(uuid)
+}
 func (ds *DaoService) Update(doc dao.Document) error {
     return ds.dao.Update(doc)
 }

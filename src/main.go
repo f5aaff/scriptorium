@@ -11,13 +11,25 @@ import (
 
 func main() {
     var conparams dao.BoltConnectionParams = dao.BoltConnectionParams{Path: "./scriptorium.db", Mode: 0600, Opts: nil}
-    var dao dao.DAO = &dao.BoltDao{}
-    err := dao.Connect(&conparams)
+    var d dao.DAO = &dao.BoltDao{}
+    err := d.Connect(&conparams)
     if err != nil {
-        log.Fatalf("error instantiated DB: %s", err.Error())
+        log.Fatalf("error instantiating DB: %s", err.Error())
     }
 
-    handler := service.NewAPIHandler(*service.New(dao))
+    docFactory := dao.NewDocumentFactory()
+    docFactory.RegisterDocumentType("Notes", func() dao.Document { return &dao.Notes{} })
+
+    daoService := service.DaoService{}
+    serv, err := daoService.New(d)
+    if err != nil {
+        log.Fatalf("error instantiating DaoService: %s", err.Error())
+    }
+    daos, ok := serv.(service.DaoService)
+    if !ok {
+        log.Fatalf("error type checking DaoService")
+    }
+    handler := service.NewAPIHandler(daos,docFactory)
 
     // Call StartRestAPI with handlers
     errCh := service.StartRestAPI(handler)

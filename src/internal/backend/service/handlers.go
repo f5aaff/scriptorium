@@ -22,15 +22,16 @@ type Handler interface {
 }
 
 type APIHandler struct {
-    DaoService DaoService
+    DaoService      DaoService
+    DocumentFactory *dao.DocumentFactory
 }
 
 func (h *APIHandler) GetService() any {
     return h.DaoService
 }
 
-func NewAPIHandler(daos DaoService) *APIHandler {
-    return &APIHandler{DaoService: daos}
+func NewAPIHandler(daos DaoService, documentFactory *dao.DocumentFactory) *APIHandler {
+    return &APIHandler{DaoService: daos, DocumentFactory: documentFactory}
 }
 
 func (h *APIHandler) SearchByKeyValue(c *gin.Context) {
@@ -38,20 +39,45 @@ func (h *APIHandler) SearchByKeyValue(c *gin.Context) {
 
 func (h *APIHandler) Create(c *gin.Context) {
 
-    var document dao.Document
+    var reqData map[string]any
 
-    if err := c.ShouldBindJSON(&document); err != nil {
+    if err := c.ShouldBindJSON(&reqData); err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
         return
     }
-    err := h.DaoService.Create(document)
+
+    docType, ok := reqData["DocType"].(string)
+    if !ok || docType == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Missing or invalid document type"})
+        return
+    }
+
+    doc, err := h.DocumentFactory.NewDocument(docType)
     if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "unknown document type"})
+        return
+    }
 
+    meta := doc.GetMetaData()
+    meta.Uuid = uuid.New().String()
+    meta.DocType = docType
+    err = doc.SetMetaData(meta)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to set metadata"})
+        return
+    }
+    docJSON, _ := json.Marshal(reqData)
+    if err := json.Unmarshal(docJSON, &doc); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to decode document"})
+        return
+    }
+    err = h.DaoService.Create(doc)
+    if err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
         return
     }
 
-    c.JSON(http.StatusOK, gin.H{"message": "Document inserted into DB", "UUID": document.GetID().String()})
+    c.JSON(http.StatusOK, gin.H{"message": "Document inserted into DB", "UUID": doc.GetID()})
 }
 
 type RequestBody struct {
@@ -59,35 +85,27 @@ type RequestBody struct {
 }
 
 func (h *APIHandler) Read(c *gin.Context) {
-
-    // instantiate RequestBody var
     var req RequestBody
-    // bind gin.Context to readRequestBody
+
     if err := c.ShouldBindJSON(&req); err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": "Missing or invalid 'UDID' parameter."})
+        return
     }
 
-    // instantiate a document var
-    var doc dao.Document
-
-    // parse a uuid from the request body
     uuid, err := uuid.Parse(req.Udid)
     if err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
     }
 
-    // read the document from the daoService
-    res, err := h.DaoService.Read(&doc, uuid)
+    rawData, err := h.DaoService.ReadRaw(uuid) // Modify DAO to return raw JSON
+    fmt.Println(string(rawData))
     if err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
     }
 
-    // marshall the result to json, send to consumer
-    resJson, err := json.Marshal(res)
-    if err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-    }
-    c.JSON(http.StatusOK, gin.H{"message": "document", "value": string(resJson)})
+    c.JSON(http.StatusOK, gin.H{"message": "document retrieved", "value": string(rawData)})
 }
 
 func (h *APIHandler) Update(c *gin.Context) {
@@ -104,7 +122,7 @@ func (h *APIHandler) Update(c *gin.Context) {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
     }
 
-    c.JSON(http.StatusOK, gin.H{"message": "update successful", "value": document.GetID().String()})
+    c.JSON(http.StatusOK, gin.H{"message": "update successful", "value": document.GetID()})
 }
 
 func (h *APIHandler) Delete(c *gin.Context) {
@@ -143,42 +161,6 @@ func (h *APIHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 
     return groupName, routes
 }
-
-// func StartRestAPI(handlers ...Handler) error {
-//     r := gin.Default()
-//
-//     for _, handler := range handlers {
-//         path, routes := handler.GetRouterGroups()
-//         group := r.Group(path) // Create a RouterGroup dynamically
-//
-//         for route, fn := range routes {
-//             parts := strings.Split(route, " ") // Extract method and route path
-//             if len(parts) != 2 {
-//                 // TODO: get logging done so this can spit out an error log, not just break.
-//                 return fmt.Errorf("Invalid route format:%s", route)
-//                 //continue
-//             }
-//             method, endpoint := parts[0], parts[1]
-//
-//             // Register route dynamically based on method
-//             switch method {
-//             case "GET":
-//                 group.GET(endpoint, fn)
-//             case "POST":
-//                 group.POST(endpoint, fn)
-//             case "PUT":
-//                 group.PUT(endpoint, fn)
-//             case "DELETE":
-//                 group.DELETE(endpoint, fn)
-//             default:
-//                 // TODO: same as above, this should be a log.
-//                 return fmt.Errorf("Unsupported method: %s", method)
-//             }
-//         }
-//     }
-//     // TODO: this needs to be parameterized
-//     return r.Run(":8080") // Start the server
-// }
 
 func StartRestAPI(handlers ...Handler) <-chan error {
     errCh := make(chan error, 1) // Buffered channel to capture errors

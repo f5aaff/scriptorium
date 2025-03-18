@@ -7,6 +7,7 @@ import (
     "github.com/google/uuid"
     "io/fs"
     "reflect"
+    "slices"
 )
 
 //---------------------------------------------------
@@ -21,6 +22,7 @@ type ConnectParams interface {
 type DAO interface {
     Create(Document) error
     Read(*Document, uuid.UUID) (Document, error)
+    ReadRaw(uuid.UUID) ([]byte, error)
     SearchByKeyValue(key, value string) ([]MetaData, error)
     Update(Document) error
     Delete(uuid.UUID) error
@@ -93,7 +95,7 @@ func (b *BoltDao) Create(doc Document) error {
             }
         }
 
-        docID := []byte(doc.GetID().String())
+        docID := []byte(doc.GetID())
         docData, err := json.Marshal(metaData)
         if err != nil {
             return fmt.Errorf("could not insert document: %v", err)
@@ -102,6 +104,29 @@ func (b *BoltDao) Create(doc Document) error {
         return bucket.Put(docID, docData)
     })
     return err
+}
+
+func (b *BoltDao) ReadRaw(id uuid.UUID) ([]byte, error) {
+    var rawData []byte
+
+    err := b.db.View(func(tx *bolt.Tx) error {
+        bucket := tx.Bucket([]byte("documents"))
+        if bucket == nil {
+            return fmt.Errorf("documents bucket does not exist")
+        }
+
+        data := bucket.Get([]byte(id.String()))
+        if data == nil {
+            return fmt.Errorf("document not found")
+        }
+
+        rawData = slices.Clone(data) // Copy data
+        return nil
+    })
+    if err != nil {
+        return nil, fmt.Errorf("error retrieving document: %v", err)
+    }
+    return rawData, nil
 }
 
 // Read method for BoltDao, expects a Document(empty ideally, for example, a 'Note') and a UUID
@@ -146,7 +171,7 @@ func (b *BoltDao) Update(doc Document) error {
             return fmt.Errorf("documents bucket does not exist")
         }
 
-        docID := []byte(doc.GetID().String())
+        docID := []byte(doc.GetID())
         docData, err := json.Marshal(metaData)
         if err != nil {
             return fmt.Errorf("could not update document: %v", err)
@@ -246,7 +271,41 @@ type MetaData struct {
     PublishDate string
     LastUpdated string
     FileType    string
-    Uuid        uuid.UUID
+    DocType     string
+    Path        string
+    Uuid        string
+}
+
+//---------------------------------------------------
+//-----------------DOCUMENT-FACTORY------------------
+//---------------------------------------------------
+
+// DocumentFactoryFunc defines a function signature for document creation.
+type DocumentFactoryFunc func() Document
+
+// DocumentFactory encapsulates the registry for document types.
+type DocumentFactory struct {
+    registry map[string]DocumentFactoryFunc
+}
+
+// NewDocumentFactory creates an instance of the factory.
+func NewDocumentFactory() *DocumentFactory {
+    return &DocumentFactory{
+        registry: make(map[string]DocumentFactoryFunc),
+    }
+}
+
+// RegisterDocumentType registers a document type in the factory.
+func (f *DocumentFactory) RegisterDocumentType(docType string, factory DocumentFactoryFunc) {
+    f.registry[docType] = factory
+}
+
+// NewDocument dynamically creates a document instance.
+func (f *DocumentFactory) NewDocument(docType string) (Document, error) {
+    if factory, found := f.registry[docType]; found {
+        return factory(), nil
+    }
+    return nil, fmt.Errorf("unknown document type: %s", docType)
 }
 
 //---------------------------------------------------
@@ -254,15 +313,13 @@ type MetaData struct {
 //---------------------------------------------------
 
 // over-arching interface to cover all subsequent document types,
-// supports some quality of life methods, and getting/setting metadata and content.
+// supports some quality of life methods, and getting/setting metadata
 type Document interface {
     GetTitle() string
     SetTitle(string) error
     GetMetaData() MetaData
     SetMetaData(MetaData) error
-    GetContent() any
-    SetContent(any) error
-    GetID() uuid.UUID
+    GetID() string
 }
 
 // basic type, for functionality testing. content is just a simple string.
@@ -303,6 +360,6 @@ func (n *Notes) SetContent(content any) error {
     return nil
 }
 
-func (n *Notes) GetID() uuid.UUID {
+func (n *Notes) GetID() string {
     return n.Metadata.Uuid
 }
