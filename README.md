@@ -84,6 +84,6 @@ and a basic software architecture to allow the management, record, and retrieval
         - expects JSON of the following structure:
         ```JSON
             {
-                "uuids": ["uuid1","uuid2"...]
+                "uuids": ["uuid1","uuid2","etc"]
             }
         ```
