@@ -89,7 +89,7 @@ namespace service {
     class DaoService << (S,Aquamarine) >> {
         - dao dao.DAO
 
-        + New(d any) any
+        + New(dao dao.DAO) any
         + SearchByKeyValue(key string, value string) ([]dao.MetaData, error)
         + Connect(params dao.ConnectParams) error
         + Disconnect() error
@@ -116,6 +116,5 @@ namespace service {
 
 "service.Handler" <|-- "service.APIHandler"
 "dao.DAO" <|-- "service.DaoService"
-"service.Service" <|-- "service.DaoService"
 
 @enduml

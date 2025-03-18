@@ -1,13 +1,16 @@
 package service
 
 import (
+    "fmt"
     "scriptorium/internal/backend/dao"
+
     "github.com/google/uuid"
 )
 
-type Service interface{
-    New(any)any
+type Service interface {
+    New(any) any
 }
+
 //---------------------------------------------------
 //-------------------DAO-SERVICE---------------------
 //---------------------------------------------------
@@ -19,7 +22,11 @@ type DaoService struct {
     dao dao.DAO
 }
 
-func New(dao dao.DAO) *DaoService {
+func (ds *DaoService) New(d any) any {
+    dao, ok := d.(dao.DAO)
+    if !ok {
+        return fmt.Errorf("not a DAO")
+    }
     return &DaoService{dao: dao}
 }
 
@@ -54,6 +61,3 @@ func (ds *DaoService) Update(doc dao.Document) error {
 func (ds *DaoService) Delete(id uuid.UUID) error {
     return ds.dao.Delete(id)
 }
-
-
-
