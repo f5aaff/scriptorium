@@ -67,7 +67,7 @@ and a basic software architecture to allow the management, record, and retrieval
         - this endpoint is for updating existing documents.
         - expects JSON of the following structure:
         ```JSON
-        '{
+        {
              "Title": "Updated Document",
              "Metadata": {
                  "Title": "Updated Title",
@@ -78,15 +78,13 @@ and a basic software architecture to allow the management, record, and retrieval
                  "Uuid": "550e8400-e29b-41d4-a716-446655440000"
              },
              "Content": "This is the updated content of the document."
-         }'
+         }
         ```
     - ```/delete``` **POST**
         - this endpoint is for deleting existing documents.
         - expects JSON of the following structure:
         ```JSON
-            '
             {
                 "uuids": ["uuid1","uuid2"...]
             }
-            '
         ```
