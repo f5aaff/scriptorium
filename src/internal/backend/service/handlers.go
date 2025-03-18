@@ -114,12 +114,12 @@ func (h *APIHandler) Update(c *gin.Context) {
 
     if err := c.ShouldBindJSON(&document); err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-        return
     }
 
     err := h.DaoService.Update(document)
     if err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
     }
 
     c.JSON(http.StatusOK, gin.H{"message": "update successful", "value": document.GetID()})
