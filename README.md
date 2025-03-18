@@ -22,11 +22,11 @@ and a basic software architecture to allow the management, record, and retrieval
                "MetaData": {
                    "Title": "some title",
                    "Author": "joe blogs"
-                   "PublishDate": "01-01-1970" // this does not actually get converted to a date yet!
-                   "LastUpdated": "01-01-1980" // same here!
-                   "FileType": "pdf" // this is arbitrary for now, could just be another searchable index.
-                   "DocType": "Notes" // Notes is currently the only DocType supported. essentially just raw text.
-                   "Path": "./notes" // relative/absolute path to the given document
+                   "PublishDate": "01-01-1970" 
+                   "LastUpdated": "01-01-1980" 
+                   "FileType": "pdf" 
+                   "DocType": "Notes" 
+                   "Path": "./notes" 
                }
             }
         ```
@@ -60,7 +60,6 @@ and a basic software architecture to allow the management, record, and retrieval
                            "Uuid": "<some uuid here, as a string>"
                        }
                    }
-               }
             }
         ```
     - ```/update``` **PUT**
