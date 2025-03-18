@@ -2,8 +2,11 @@ package service
 
 import (
     "encoding/json"
+    "fmt"
+    "log"
     "net/http"
     "scriptorium/internal/backend/dao"
+    "strings"
 
     "github.com/gin-gonic/gin"
     "github.com/google/uuid"
@@ -13,8 +16,17 @@ import (
 //-------------------API-HANDLER---------------------
 //---------------------------------------------------
 
+type Handler interface {
+    GetRouterGroups() (string, map[string]gin.HandlerFunc)
+    GetService() any
+}
+
 type APIHandler struct {
     DaoService DaoService
+}
+
+func (h *APIHandler) GetService() any {
+    return h.DaoService
 }
 
 func NewAPIHandler(daos DaoService) *APIHandler {
@@ -116,4 +128,100 @@ func (h *APIHandler) Delete(c *gin.Context) {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
     }
     c.JSON(http.StatusBadRequest, gin.H{"message": "record deleted successfully", "value": req.Udid})
+}
+
+func (h *APIHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
+    groupName := "/data"
+
+    // Define the routes and corresponding handlers
+    routes := map[string]gin.HandlerFunc{
+        "POST /create": h.Create,
+        "POST /read":   h.Read,
+        "PUT /update":  h.Update,
+        "GET /search":  h.SearchByKeyValue,
+    }
+
+    return groupName, routes
+}
+
+// func StartRestAPI(handlers ...Handler) error {
+//     r := gin.Default()
+//
+//     for _, handler := range handlers {
+//         path, routes := handler.GetRouterGroups()
+//         group := r.Group(path) // Create a RouterGroup dynamically
+//
+//         for route, fn := range routes {
+//             parts := strings.Split(route, " ") // Extract method and route path
+//             if len(parts) != 2 {
+//                 // TODO: get logging done so this can spit out an error log, not just break.
+//                 return fmt.Errorf("Invalid route format:%s", route)
+//                 //continue
+//             }
+//             method, endpoint := parts[0], parts[1]
+//
+//             // Register route dynamically based on method
+//             switch method {
+//             case "GET":
+//                 group.GET(endpoint, fn)
+//             case "POST":
+//                 group.POST(endpoint, fn)
+//             case "PUT":
+//                 group.PUT(endpoint, fn)
+//             case "DELETE":
+//                 group.DELETE(endpoint, fn)
+//             default:
+//                 // TODO: same as above, this should be a log.
+//                 return fmt.Errorf("Unsupported method: %s", method)
+//             }
+//         }
+//     }
+//     // TODO: this needs to be parameterized
+//     return r.Run(":8080") // Start the server
+// }
+
+func StartRestAPI(handlers ...Handler) <-chan error {
+    errCh := make(chan error, 1) // Buffered channel to capture errors
+
+    go func() {
+        r := gin.Default()
+
+        for _, handler := range handlers {
+            path, routes := handler.GetRouterGroups()
+            group := r.Group(path) // Create a RouterGroup dynamically
+
+            for route, fn := range routes {
+                parts := strings.Split(route, " ") // Extract method and route path
+                if len(parts) != 2 {
+                    log.Printf("Invalid route format: %s", route)
+                    errCh <- fmt.Errorf("Invalid route format: %s", route)
+                    return
+                }
+                method, endpoint := parts[0], parts[1]
+
+                // Register route dynamically based on method
+                switch method {
+                case "GET":
+                    group.GET(endpoint, fn)
+                case "POST":
+                    group.POST(endpoint, fn)
+                case "PUT":
+                    group.PUT(endpoint, fn)
+                case "DELETE":
+                    group.DELETE(endpoint, fn)
+                default:
+                    log.Printf("Unsupported method: %s", method)
+                    errCh <- fmt.Errorf("Unsupported method: %s", method)
+                    return
+                }
+            }
+        }
+
+        // Start the server and capture any errors
+        if err := r.Run(":8080"); err != nil {
+            errCh <- err
+        }
+    }()
+
+    return errCh // Return the error channel to listen for errors
 }

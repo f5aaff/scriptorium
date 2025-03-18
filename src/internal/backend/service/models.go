@@ -5,6 +5,9 @@ import (
     "github.com/google/uuid"
 )
 
+type Service interface{
+    New(any)any
+}
 //---------------------------------------------------
 //-------------------DAO-SERVICE---------------------
 //---------------------------------------------------
@@ -16,7 +19,7 @@ type DaoService struct {
     dao dao.DAO
 }
 
-func NewDaoService(dao dao.DAO) *DaoService {
+func New(dao dao.DAO) *DaoService {
     return &DaoService{dao: dao}
 }
 

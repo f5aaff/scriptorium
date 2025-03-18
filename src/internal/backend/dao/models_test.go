@@ -11,7 +11,7 @@ import (
 )
 
 // connection parameters for connection to test DB
-var conparams = BoltConnectionParams{path: "./test.db", mode: 0600, opts: nil}
+var conparams *BoltConnectionParams = &BoltConnectionParams{Path: "./test.db", Mode: 0600, Opts: nil}
 
 // path to make/access test db
 const tempDbPath = "./test.db"

@@ -33,21 +33,51 @@ type DAO interface {
 //---------------------------------------------------
 
 type BoltConnectionParams struct {
-    path string
-    mode fs.FileMode
-    opts *bolt.Options
+    Path string
+    Mode fs.FileMode
+    Opts *bolt.Options
 }
 
 // TODO: fix this dumpster fire of a design decision
 // this is nightmare fuel, and needs a more elegant solution -
 // perhaps interface/concrete isn't necessarily the right tool for the job?
-func (bcp BoltConnectionParams) getParams() any {
-    return bcp
+func (bcp *BoltConnectionParams) getParams() any {
+    return *bcp
 }
 
 // BoltDAO struct, with realised methods from the DAO interface
 type BoltDao struct {
     db *bolt.DB
+}
+
+func (b *BoltDao) Connect(cp ConnectParams) error {
+    // Open the my.db data file in your current directory.
+    // It will be created if it doesn't exist.
+    params, ok := cp.getParams().(BoltConnectionParams)
+    if !ok {
+        return fmt.Errorf("connection parameters do not conform to BoltConnectionParams type.")
+    }
+    // connect to given db
+    // TODO: template out db path and permissions to environment variables
+    db, err := bolt.Open(params.Path, params.Mode, params.Opts)
+    if err != nil {
+        return fmt.Errorf("failed to open DB: %v", err)
+    }
+
+    // assign DAO db to established connection
+    b.db = db
+    return nil
+}
+
+func (b *BoltDao) Disconnect() error {
+    if b.db != nil {
+        err := b.db.Close()
+        if err != nil {
+            return fmt.Errorf("failed to close DB: %v", err)
+        }
+        b.db = nil
+    }
+    return nil
 }
 
 func (b *BoltDao) Create(doc Document) error {
@@ -72,71 +102,6 @@ func (b *BoltDao) Create(doc Document) error {
         return bucket.Put(docID, docData)
     })
     return err
-}
-
-func (b *BoltDao) SearchByKeyValue(key, value string) ([]MetaData, error) {
-    var results []MetaData
-
-    err := b.db.View(func(tx *bolt.Tx) error {
-        bucket := tx.Bucket([]byte("documents"))
-        if bucket == nil {
-            return fmt.Errorf("documents bucket does not exist")
-        }
-
-        c := bucket.Cursor()
-        for _, v := c.First(); v != nil; _, v = c.Next() {
-            var metaData MetaData
-            if err := json.Unmarshal(v, &metaData); err != nil {
-                return fmt.Errorf("error unmarshaling document: %v", err)
-            }
-
-            // Check if metadata contains the key-value pair (case-insensitive match for strings)
-            if metaDataMatches(metaData, key, value) {
-                results = append(results, metaData)
-            }
-        }
-        return nil
-    })
-    if err != nil {
-        return nil, fmt.Errorf("error searching documents: %v", err)
-    }
-
-    return results, nil
-}
-
-// Helper function to check if metadata struct contains the key-value pair
-func metaDataMatches(metaData MetaData, key, value string) bool {
-    metaValue, err := getStructFieldValue(metaData, key)
-    if err != nil {
-        return false // Field not found or invalid
-    }
-    return metaValue == value
-}
-
-// Reflection-based function to retrieve a field value by name
-func getStructFieldValue(metaData MetaData, fieldName string) (string, error) {
-    val := reflect.ValueOf(metaData)
-
-    // Ensure we're dealing with a struct
-    if val.Kind() == reflect.Ptr {
-        val = val.Elem() // Dereference pointer if needed
-    }
-
-    if val.Kind() != reflect.Struct {
-        return "", fmt.Errorf("expected struct, got %s", val.Kind())
-    }
-
-    field := val.FieldByName(fieldName)
-    if !field.IsValid() {
-        return "", fmt.Errorf("field %s not found in metadata", fieldName)
-    }
-
-    // Ensure the field is a string before returning it
-    if field.Kind() == reflect.String {
-        return field.String(), nil
-    }
-
-    return "", fmt.Errorf("field %s is not a string", fieldName)
 }
 
 // Read method for BoltDao, expects a Document(empty ideally, for example, a 'Note') and a UUID
@@ -204,34 +169,69 @@ func (b *BoltDao) Delete(id uuid.UUID) error {
     return err
 }
 
-func (b *BoltDao) Connect(cp ConnectParams) error {
-    // Open the my.db data file in your current directory.
-    // It will be created if it doesn't exist.
-    params, ok := cp.getParams().(BoltConnectionParams)
-    if !ok {
-        return fmt.Errorf("connection parameters do not conform to BoltConnectionParams type.")
-    }
-    // connect to given db
-    // TODO: template out db path and permissions to environment variables
-    db, err := bolt.Open(params.path, params.mode, params.opts)
+func (b *BoltDao) SearchByKeyValue(key, value string) ([]MetaData, error) {
+    var results []MetaData
+
+    err := b.db.View(func(tx *bolt.Tx) error {
+        bucket := tx.Bucket([]byte("documents"))
+        if bucket == nil {
+            return fmt.Errorf("documents bucket does not exist")
+        }
+
+        c := bucket.Cursor()
+        for _, v := c.First(); v != nil; _, v = c.Next() {
+            var metaData MetaData
+            if err := json.Unmarshal(v, &metaData); err != nil {
+                return fmt.Errorf("error unmarshaling document: %v", err)
+            }
+
+            // Check if metadata contains the key-value pair (case-insensitive match for strings)
+            if metaDataMatches(metaData, key, value) {
+                results = append(results, metaData)
+            }
+        }
+        return nil
+    })
     if err != nil {
-        return fmt.Errorf("failed to open DB: %v", err)
+        return nil, fmt.Errorf("error searching documents: %v", err)
     }
 
-    // assign DAO db to established connection
-    b.db = db
-    return nil
+    return results, nil
 }
 
-func (b *BoltDao) Disconnect() error {
-    if b.db != nil {
-        err := b.db.Close()
-        if err != nil {
-            return fmt.Errorf("failed to close DB: %v", err)
-        }
-        b.db = nil
+// Helper function to check if metadata struct contains the key-value pair
+func metaDataMatches(metaData MetaData, key, value string) bool {
+    metaValue, err := getStructFieldValue(metaData, key)
+    if err != nil {
+        return false // Field not found or invalid
     }
-    return nil
+    return metaValue == value
+}
+
+// Reflection-based function to retrieve a field value by name
+func getStructFieldValue(metaData MetaData, fieldName string) (string, error) {
+    val := reflect.ValueOf(metaData)
+
+    // Ensure we're dealing with a struct
+    if val.Kind() == reflect.Ptr {
+        val = val.Elem() // Dereference pointer if needed
+    }
+
+    if val.Kind() != reflect.Struct {
+        return "", fmt.Errorf("expected struct, got %s", val.Kind())
+    }
+
+    field := val.FieldByName(fieldName)
+    if !field.IsValid() {
+        return "", fmt.Errorf("field %s not found in metadata", fieldName)
+    }
+
+    // Ensure the field is a string before returning it
+    if field.Kind() == reflect.String {
+        return field.String(), nil
+    }
+
+    return "", fmt.Errorf("field %s is not a string", fieldName)
 }
 
 //---------------------------------------------------
