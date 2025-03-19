@@ -5,11 +5,19 @@ import (
     "os"
     "os/signal"
     "scriptorium/internal/backend/dao"
+    "scriptorium/internal/backend/fao"
     "scriptorium/internal/backend/service"
     "syscall"
+
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
+    //---------------------------------------------------
+    //----------------API-HANDLER-SET-UP-----------------
+    //---------------------------------------------------
+
     var conparams dao.BoltConnectionParams = dao.BoltConnectionParams{Path: "./scriptorium.db", Mode: 0600, Opts: nil}
     var d dao.DAO = &dao.BoltDao{}
     err := d.Connect(&conparams)
@@ -21,18 +29,47 @@ func main() {
     docFactory.RegisterDocumentType("Notes", func() dao.Document { return &dao.Notes{} })
 
     daoService := service.DaoService{}
-    serv, err := daoService.New(d)
+    daoServ, err := daoService.New(d)
     if err != nil {
         log.Fatalf("error instantiating DaoService: %s", err.Error())
     }
-    daos, ok := serv.(service.DaoService)
+    daos, ok := daoServ.(service.DaoService)
     if !ok {
         log.Fatalf("error type checking DaoService")
     }
-    handler := service.NewAPIHandler(daos,docFactory)
+
+    apiHandler := service.NewAPIHandler(daos, docFactory)
+
+    //---------------------------------------------------
+    //----------------FILE-HANDLER-SET-UP----------------
+    //---------------------------------------------------
+
+    conn, err := grpc.NewClient("localhost:5001", grpc.WithTransportCredentials(insecure.NewCredentials()))
+    if err != nil {
+        log.Fatalf("failed to connect to gRPC server: %v", err)
+    }
+    defer conn.Close()
+
+    var f fao.FAO = &fao.LocalFao{}
+    fileHandlerService := service.FileHandlerService{}
+    fhServ, err := fileHandlerService.New(f)
+    if err != nil {
+        log.Fatalf("error instantiating FileHandlerService: %s", err.Error())
+    }
+
+    faos, ok := fhServ.(service.FileHandlerService)
+    if !ok {
+        log.Fatalf("error type checking FileHandlerService")
+    }
+
+    fileHandler := service.NewFileHandler(faos, conn)
+
+    //---------------------------------------------------
+    //-------------------SERVICE-START-------------------
+    //---------------------------------------------------
 
     // Call StartRestAPI with handlers
-    errCh := service.StartRestAPI(handler)
+    errCh := service.StartRestAPI(apiHandler, fileHandler)
     // Set up graceful shutdown
     signalCh := make(chan os.Signal, 1)
     signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
