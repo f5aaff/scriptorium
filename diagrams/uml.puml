@@ -84,6 +84,137 @@ namespace dao {
 "dao.DAO" <|-- "dao.BoltDao"
 "dao.Document" <|-- "dao.Notes"
 
+namespace fao {
+    interface FAO  {
+        + SaveFile(path string, data io.Reader) error
+        + GetFile(path string) (io.ReadCloser, error)
+        + DeleteFile(path string) error
+        + FileExists(filename string) bool
+
+    }
+    class LocalFao << (S,Aquamarine) >> {
+        - basePath string
+
+        + SaveFile(path string, data io.Reader) error
+        + GetFile(path string) (io.ReadCloser, error)
+        + DeleteFile(path string) error
+        + FileExists(path string) bool
+
+    }
+}
+
+"fao.FAO" <|-- "fao.LocalFao"
+
+namespace pb {
+    class FileChunk << (S,Aquamarine) >> {
+        - state protoimpl.MessageState
+        - unknownFields protoimpl.UnknownFields
+        - sizeCache protoimpl.SizeCache
+
+        + Data []byte
+        + Filename string
+
+        + Reset() 
+        + String() string
+        + ProtoMessage() 
+        + ProtoReflect() protoreflect.Message
+        + Descriptor() ([]byte, []int)
+        + GetData() []byte
+        + GetFilename() string
+
+    }
+    class FileRequest << (S,Aquamarine) >> {
+        - state protoimpl.MessageState
+        - unknownFields protoimpl.UnknownFields
+        - sizeCache protoimpl.SizeCache
+
+        + Filename string
+
+        + Reset() 
+        + String() string
+        + ProtoMessage() 
+        + ProtoReflect() protoreflect.Message
+        + Descriptor() ([]byte, []int)
+        + GetFilename() string
+
+    }
+    interface FileServiceClient  {
+        + DownloadFile(ctx context.Context, in *FileRequest, opts ...grpc.CallOption) (, error)
+        + UploadFile(ctx context.Context, opts ...grpc.CallOption) (, error)
+
+    }
+    interface FileServiceServer  {
+        - mustEmbedUnimplementedFileServiceServer() 
+
+        + DownloadFile( *FileRequest,  ) error
+        + UploadFile( ) error
+
+    }
+    class FileUploadResponse << (S,Aquamarine) >> {
+        - state protoimpl.MessageState
+        - unknownFields protoimpl.UnknownFields
+        - sizeCache protoimpl.SizeCache
+
+        + Message string
+
+        + Reset() 
+        + String() string
+        + ProtoMessage() 
+        + ProtoReflect() protoreflect.Message
+        + Descriptor() ([]byte, []int)
+        + GetMessage() string
+
+    }
+    class UnimplementedFileServiceServer << (S,Aquamarine) >> {
+        - mustEmbedUnimplementedFileServiceServer() 
+        - testEmbeddedByValue() 
+
+        + DownloadFile( *FileRequest,  ) error
+        + UploadFile( ) error
+
+    }
+    interface UnsafeFileServiceServer  {
+        - mustEmbedUnimplementedFileServiceServer() 
+
+    }
+    class UploadStatus << (S,Aquamarine) >> {
+        - state protoimpl.MessageState
+        - unknownFields protoimpl.UnknownFields
+        - sizeCache protoimpl.SizeCache
+
+        + Success bool
+        + Message string
+
+        + Reset() 
+        + String() string
+        + ProtoMessage() 
+        + ProtoReflect() protoreflect.Message
+        + Descriptor() ([]byte, []int)
+        + GetSuccess() bool
+        + GetMessage() string
+
+    }
+    class fileServiceClient << (S,Aquamarine) >> {
+        - cc grpc.ClientConnInterface
+
+        + DownloadFile(ctx context.Context, in *FileRequest, opts ...grpc.CallOption) (, error)
+        + UploadFile(ctx context.Context, opts ...grpc.CallOption) (, error)
+
+    }
+    class pb.FileService_DownloadFileClient << (T, #FF7700) >>  {
+    }
+    class pb.FileService_DownloadFileServer << (T, #FF7700) >>  {
+    }
+    class pb.FileService_UploadFileClient << (T, #FF7700) >>  {
+    }
+    class pb.FileService_UploadFileServer << (T, #FF7700) >>  {
+    }
+}
+
+"pb.FileServiceServer" <|-- "pb.UnimplementedFileServiceServer"
+"pb.UnsafeFileServiceServer" <|-- "pb.UnimplementedFileServiceServer"
+"pb.FileServiceClient" <|-- "pb.fileServiceClient"
+
 namespace service {
     class APIHandler << (S,Aquamarine) >> {
         + DaoService DaoService
@@ -112,13 +243,32 @@ namespace service {
         + Delete(id uuid.UUID) error
 
     }
+    class FileHandler << (S,Aquamarine) >> {
+        + FaoService FileHandlerService
+        + FileServiceClient pb.FileServiceClient
+
+        + GetService() any
+        + UploadFile(c *gin.Context) 
+        + DownloadFile(c *gin.Context) 
+        + GetRouterGroups() (string, <font color=blue>map</font>[string]gin.HandlerFunc)
+
+    }
+    class FileHandlerService << (S,Aquamarine) >> {
+        - fss pb.UnimplementedFileServiceServer
+        - fao fao.FAO
+
+        + New(f any) (Service, error)
+        + UploadFile(filename string, stream pb.FileService_UploadFileServer) error
+        + DownloadFile(req *pb.FileRequest, stream pb.FileService_DownloadFileServer) error
+
+    }
     interface Handler  {
         + GetRouterGroups() (string, <font color=blue>map</font>[string]gin.HandlerFunc)
         + GetService() any
 
     }
     class RequestBody << (S,Aquamarine) >> {
-        + Udid string
+        + Uuid string
 
     }
     interface Service  {
@@ -130,6 +280,12 @@ namespace service {
 "service.Handler" <|-- "service.APIHandler"
 "dao.DAO" <|-- "service.DaoService"
 "service.Service" <|-- "service.DaoService"
+"service.Handler" <|-- "service.FileHandler"
+"service.Service" <|-- "service.FileHandlerService"
 
 "dao.<font color=blue>func</font>() Document" #.. "dao.DocumentFactoryFunc"
+"pb." #.. "pb.FileService_DownloadFileClient"
+"pb." #.. "pb.FileService_DownloadFileServer"
+"pb." #.. "pb.FileService_UploadFileClient"
+"pb." #.. "pb.FileService_UploadFileServer"
 @enduml
