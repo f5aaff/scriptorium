@@ -25,7 +25,6 @@ type DAO interface {
 	Read(*Document, uuid.UUID) (Document, error)
 	ReadRaw(uuid.UUID) ([]byte, error)
 	SearchByKeyValue(key, value string) ([]MetaData, error)
-	GetAllDocuments() ([]MetaData, error)
 	Update(Document) error
 	Delete(uuid.UUID) error
 	Connect(ConnectParams) error
@@ -221,32 +220,6 @@ func (b *BoltDao) SearchByKeyValue(key, value string) ([]MetaData, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error searching documents: %v", err)
-	}
-
-	return results, nil
-}
-
-func (b *BoltDao) GetAllDocuments() ([]MetaData, error) {
-	var results []MetaData
-
-	err := b.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("documents"))
-		if bucket == nil {
-			return fmt.Errorf("documents bucket does not exist")
-		}
-
-		c := bucket.Cursor()
-		for _, v := c.First(); v != nil; _, v = c.Next() {
-			var metaData MetaData
-			if err := json.Unmarshal(v, &metaData); err != nil {
-				return fmt.Errorf("error unmarshaling document: %v", err)
-			}
-			results = append(results, metaData)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("error retrieving all documents: %v", err)
 	}
 
 	return results, nil

@@ -154,14 +154,6 @@ func (ds *DaoService) Read(doc *dao.Document, uuid uuid.UUID) (dao.Document, err
 func (ds *DaoService) ReadRaw(uuid uuid.UUID) ([]byte, error) {
 	return ds.dao.ReadRaw(uuid)
 }
-
-func (ds *DaoService) GetAllDocuments() ([]dao.MetaData, error) {
-	// This will need to be implemented in the DAO layer
-	// For now, we'll use the existing SearchByKeyValue with empty parameters
-	// or implement a new method in the DAO interface
-	return ds.dao.GetAllDocuments()
-}
-
 func (ds *DaoService) Update(doc dao.Document) error {
 	return ds.dao.Update(doc)
 }
