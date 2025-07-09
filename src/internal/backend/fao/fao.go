@@ -41,7 +41,7 @@ func (l *LocalFao) SaveFile(path string, data io.Reader) error {
 }
 
 // retrieves a file from disk, path being the source, returning a stream/error
-func (l *LocalFao) GetFile(path string) (io.ReadCloser, error) {
+func (l LocalFao) GetFile(path string) (io.ReadCloser, error) {
     filePath := filepath.Join(l.basePath, path)
 
     file, err := os.Open(filePath)
@@ -53,7 +53,7 @@ func (l *LocalFao) GetFile(path string) (io.ReadCloser, error) {
 }
 
 // deletes a file on disk
-func (l *LocalFao) DeleteFile(path string) error {
+func (l LocalFao) DeleteFile(path string) error {
     filePath := filepath.Join(l.basePath, path)
 
     err := os.Remove(filePath)
@@ -64,7 +64,7 @@ func (l *LocalFao) DeleteFile(path string) error {
     return nil
 }
 // returns true if file exists, otherwise false.
-func (l *LocalFao) FileExists(path string) bool {
+func (l LocalFao) FileExists(path string) bool {
     filePath := filepath.Join(l.basePath, path)
     _, err := os.Stat(filePath)
     return !os.IsNotExist(err)
