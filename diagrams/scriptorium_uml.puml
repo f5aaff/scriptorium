@@ -1,0 +1,200 @@
+@startuml
+namespace converter {
+    interface Converter  {
+        + ConvertFile(inputPath string, outputPath string, fromFormat string, toFormat string) error
+        + ConvertDocumentByUUID(documentUUID string, fromFormat string, toFormat string) (string, error)
+        + ConvertFileByPath(filePath string, fromFormat string, toFormat string) (string, error)
+        + GetAvailableFormats() (<font color=blue>map</font>[string][]string, error)
+
+    }
+    class PandocConverter << (S,Aquamarine) >> {
+        - pandocPath string
+        - dao dao.DAO
+        - fao fao.FAO
+
+        - runPandoc(inputPath string, outputPath string, fromFormat string, toFormat string) error
+        - getPandocFormats(formatFlag string) ([]string, error)
+
+        + ConvertFile(inputPath string, outputPath string, fromFormat string, toFormat string) error
+        + ConvertDocumentByUUID(documentUUID string, fromFormat string, toFormat string) (string, error)
+        + ConvertFileByPath(filePath string, fromFormat string, toFormat string) (string, error)
+        + GetAvailableFormats() (<font color=blue>map</font>[string][]string, error)
+
+    }
+}
+
+"converter.Converter" <|-- "converter.PandocConverter"
+
+namespace dao {
+    class BoltConnectionParams << (S,Aquamarine) >> {
+        + Path string
+        + Mode fs.FileMode
+        + Opts *bolt.Options
+
+        - getParams() any
+
+    }
+    class BoltDao << (S,Aquamarine) >> {
+        - db *bolt.DB
+
+        + Connect(cp ConnectParams) error
+        + Disconnect() error
+        + Create(doc Document) error
+        + ReadRaw(id uuid.UUID) ([]byte, error)
+        + Read(doc *Document, id uuid.UUID) (Document, error)
+        + Update(doc Document) error
+        + Delete(id uuid.UUID) error
+        + SearchByKeyValue(key string, value string) ([]MetaData, error)
+
+    }
+    interface ConnectParams  {
+        - getParams() any
+
+    }
+    interface DAO  {
+        + Create( Document) error
+        + Read( *Document,  uuid.UUID) (Document, error)
+        + ReadRaw( uuid.UUID) ([]byte, error)
+        + SearchByKeyValue(key string, value string) ([]MetaData, error)
+        + Update( Document) error
+        + Delete( uuid.UUID) error
+        + Connect( ConnectParams) error
+        + Disconnect() error
+
+    }
+    interface Document  {
+        + GetTitle() string
+        + SetTitle( string) error
+        + GetMetaData() MetaData
+        + SetMetaData( MetaData) error
+        + GetID() string
+
+    }
+    class DocumentFactory << (S,Aquamarine) >> {
+        - registry <font color=blue>map</font>[string]DocumentFactoryFunc
+
+        + RegisterDocumentType(docType string, factory DocumentFactoryFunc) 
+        + NewDocument(docType string) (Document, error)
+
+    }
+    class MetaData << (S,Aquamarine) >> {
+        + Title string
+        + Author string
+        + PublishDate string
+        + LastUpdated string
+        + FileType string
+        + DocType string
+        + Path string
+        + Uuid string
+
+    }
+    class Notes << (S,Aquamarine) >> {
+        + Title string
+        + Metadata MetaData
+        + Content string
+
+        + GetTitle() string
+        + SetTitle(title string) error
+        + GetMetaData() MetaData
+        + SetMetaData(meta MetaData) error
+        + GetContent() any
+        + SetContent(content any) error
+        + GetID() string
+
+    }
+    class dao.DocumentFactoryFunc << (T, #FF7700) >>  {
+    }
+}
+
+"dao.ConnectParams" <|-- "dao.BoltConnectionParams"
+"dao.DAO" <|-- "dao.BoltDao"
+"dao.Document" <|-- "dao.Notes"
+
+namespace fao {
+    interface FAO  {
+        + SaveFile(path string, data io.Reader) error
+        + GetFile(path string) (io.ReadCloser, error)
+        + DeleteFile(path string) error
+        + FileExists(filename string) bool
+
+    }
+    class LocalFao << (S,Aquamarine) >> {
+        - basePath string
+
+        + SaveFile(path string, data io.Reader) error
+        + GetFile(path string) (io.ReadCloser, error)
+        + DeleteFile(path string) error
+        + FileExists(path string) bool
+
+    }
+}
+
+"fao.FAO" <|-- "fao.LocalFao"
+
+
+
+namespace service {
+    class APIHandler << (S,Aquamarine) >> {
+        + DaoService DaoService
+        + DocumentFactory *dao.DocumentFactory
+
+        + GetService() any
+        + SearchByKeyValue(c *gin.Context) 
+        + Create(c *gin.Context) 
+        + Read(c *gin.Context) 
+        + Update(c *gin.Context) 
+        + Delete(c *gin.Context) 
+        + GetRouterGroups() (string, <font color=blue>map</font>[string]gin.HandlerFunc)
+
+    }
+    class DaoService << (S,Aquamarine) >> {
+        - dao dao.DAO
+
+        + New(d any) (Service, error)
+        + SearchByKeyValue(key string, value string) ([]dao.MetaData, error)
+        + Connect(params dao.ConnectParams) error
+        + Disconnect() error
+        + Create(doc dao.Document) error
+        + Read(doc *dao.Document, uuid uuid.UUID) (dao.Document, error)
+        + ReadRaw(uuid uuid.UUID) ([]byte, error)
+        + Update(doc dao.Document) error
+        + Delete(id uuid.UUID) error
+
+    }
+    class FileHandler << (S,Aquamarine) >> {
+        + FaoService FileHandlerService
+        + FileServiceClient pb.FileServiceClient
+
+        + GetService() any
+        + UploadFile(c *gin.Context) 
+        + DownloadFile(c *gin.Context) 
+        + GetRouterGroups() (string, <font color=blue>map</font>[string]gin.HandlerFunc)
+
+    }
+    class FileHandlerService << (S,Aquamarine) >> {
+        - fao fao.FAO
+
+        + New(f any) (Service, error)
+        + UploadFile(stream ) error
+        + DownloadFile(req *pb.FileRequest, stream ) error
+
+    }
+    interface Handler  {
+        + GetRouterGroups() (string, <font color=blue>map</font>[string]gin.HandlerFunc)
+        + GetService() any
+
+    }
+    interface Service  {
+        + New( any) (Service, error)
+
+    }
+}
+
+"service.Handler" <|-- "service.APIHandler"
+"dao.DAO" <|-- "service.DaoService"
+"service.Service" <|-- "service.DaoService"
+"service.Handler" <|-- "service.FileHandler"
+"service.Service" <|-- "service.FileHandlerService"
+
+"dao.<font color=blue>func</font>() Document" #.. "dao.DocumentFactoryFunc"
+@enduml
