@@ -202,6 +202,150 @@
     loadMoreItems();
   }
 
+  async function downloadItem(item: LibraryItem) {
+    try {
+      console.log(`Downloading file: ${item.Title} (${item.Uuid})`);
+
+      // Fetch the file as a blob
+      const response = await fetch(`http://localhost:8080/file/download/${item.Uuid}`);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      // Get the blob from the response
+      const blob = await response.blob();
+
+      if (blob.size === 0) {
+        throw new Error('Received empty file');
+      }
+
+      // Create filename with proper extension
+      let filename = item.Title || item.Uuid;
+      if (item.FileType && !filename.includes('.')) {
+        filename += `.${item.FileType}`;
+      }
+
+      // Use the modern File System Access API to show save dialog
+      if ('showSaveFilePicker' in window) {
+        try {
+          const fileHandle = await (window as any).showSaveFilePicker({
+            suggestedName: filename,
+            types: [{
+              description: 'File',
+              accept: {
+                [blob.type || 'application/octet-stream']: [`.${item.FileType}`]
+              }
+            }]
+          });
+
+          const writable = await fileHandle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+
+          console.log('File saved successfully');
+        } catch (saveError) {
+          console.log('User cancelled save or File System Access API failed, falling back to download link');
+          // Fall back to download link method
+          fallbackDownload(blob, filename);
+        }
+      } else {
+        // Fall back for browsers that don't support File System Access API
+        fallbackDownload(blob, filename);
+      }
+
+    } catch (error) {
+      console.error('Error downloading file:', error);
+      alert(`Download failed: ${error.message}`);
+    }
+  }
+
+    function fallbackDownload(blob: Blob, filename: string) {
+    // Create a blob URL
+    const blobUrl = window.URL.createObjectURL(blob);
+    
+    // Create a temporary anchor element
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    link.style.display = 'none';
+    
+    // Append to body, click, and clean up
+    document.body.appendChild(link);
+    link.click();
+    
+    // Clean up after a delay
+    setTimeout(() => {
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+    }, 1000);
+  }
+
+  async function deleteItem(item: LibraryItem) {
+    try {
+      console.log(`Deleting item: ${item.Title} (${item.Uuid})`);
+      
+      // Show confirmation dialog
+      if (!confirm(`Are you sure you want to delete "${item.Title}"? This action cannot be undone.`)) {
+        return;
+      }
+      
+      // Call the delete API
+      const requestBody = { uuids: [item.Uuid] };
+      console.log('Sending delete request:', requestBody);
+      
+      const response = await fetch('http://localhost:8080/data/delete', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody)
+      });
+      
+      const result = await response.json();
+      console.log('Delete result:', result);
+      
+      if (!response.ok) {
+        // Check if any items were actually deleted
+        if (result.deleted_count > 0) {
+          // Some items were deleted successfully, but there were also errors
+          console.warn('Partial deletion:', result);
+          
+          // Check if the error was just about file deletion
+          const hasFileErrors = result.errors && result.errors.some(error => 
+            error.includes('Failed to delete file') || error.includes('file')
+          );
+          
+          if (hasFileErrors) {
+            alert(`Warning: "${item.Title}" was removed from the library, but the physical file could not be deleted. This is usually not a problem.`);
+          } else {
+            alert(`Warning: "${item.Title}" was deleted with some issues. Check console for details.`);
+          }
+        } else {
+          // No items were deleted, treat as error
+          const errorMessage = result.errors ? result.errors.join(', ') : result.error || response.statusText;
+          throw new Error(`Delete failed: ${errorMessage}`);
+        }
+      } else {
+        // Complete success
+        alert(`Successfully deleted "${item.Title}"`);
+      }
+      
+      // Remove the item from the local lists
+      items = items.filter(libItem => libItem.Uuid !== item.Uuid);
+      filteredItems = filteredItems.filter(libItem => libItem.Uuid !== item.Uuid);
+      
+      // Close the detail view if the deleted item was selected
+      if (selectedItem && selectedItem.Uuid === item.Uuid) {
+        selectedItem = null;
+      }
+      
+    } catch (error) {
+      console.error('Error deleting item:', error);
+      alert(`Delete failed: ${error.message}`);
+    }
+  }
+
   onMount(() => {
     console.log('Library component mounted. Loading initial items.');
     loadMoreItems();
@@ -347,8 +491,8 @@
 
           <div class="card-actions">
             <button class="action-button primary">Open</button>
-            <button class="action-button">Download</button>
-            <button class="action-button">Share</button>
+            <button class="action-button" on:click={() => downloadItem(selectedItem)}>Download</button>
+            <button class="action-button" on:click={() => deleteItem(selectedItem)}>Delete</button>
           </div>
         </div>
       </div>

@@ -7,6 +7,8 @@
   let dragOver = false;
   let uploading = false;
   let uploadProgress = 0;
+  let uploadSuccess = false;
+  let uploadError = '';
   let fileName = '';
   let fileSize = '';
   let fileType = '';
@@ -15,7 +17,6 @@
   let metadataTitle = '';
   let metadataAuthor = '';
   let metadataDocType = '';
-  let metadataPath = '';
   let metadataContent = '';
 
   function handleFileSelect(event: Event) {
@@ -55,7 +56,6 @@ function setFileInfo(file: File) {
     metadataTitle = file.name;
     metadataAuthor = '';
     metadataDocType = 'Notes';
-    metadataPath = './documents';
     metadataContent = '';
   }
 
@@ -82,10 +82,24 @@ function setFileInfo(file: File) {
 async function uploadFile(file: File, metadata?: any): Promise<void> {
   uploading = true;
   uploadProgress = 0;
+  uploadSuccess = false;
+  uploadError = '';
 
   return new Promise<void>((resolve, reject) => {
     const formData = new FormData();
     formData.append("file", file);
+
+    // Add metadata to form data if provided
+    if (metadata) {
+      const metadataObj = {
+        DocType: metadata.DocType || "Notes",
+        Title: metadata.Title || file.name,
+        Author: metadata.Author || "Unknown",
+        PublishDate: metadata.PublishDate || new Date().toISOString().split("T")[0],
+        Content: metadata.Content || ""
+      };
+      formData.append("metadata", JSON.stringify(metadataObj));
+    }
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "http://localhost:8080/file/upload", true);
@@ -96,50 +110,37 @@ async function uploadFile(file: File, metadata?: any): Promise<void> {
       }
     };
 
-    xhr.onload = async () => {
+    xhr.onload = () => {
       uploading = false;
       if (xhr.status >= 200 && xhr.status < 300) {
-        console.log("Upload successful:", xhr.responseText);
-
-        // Prepare metadata for /data/create
-        const body = {
-          DocType: metadata?.DocType || "Notes",
-          Title: metadata?.Title || file.name,
-          Content: metadata?.Content || "",
-          MetaData: {
-            Title: metadata?.Title || file.name,
-            Author: metadata?.Author || "Unknown",
-            PublishDate: metadata?.PublishDate || new Date().toISOString().split("T")[0],
-            LastUpdated: metadata?.LastUpdated || new Date().toISOString().split("T")[0],
-            FileType: file.type || "txt",
-            DocType: metadata?.DocType || "Notes",
-            Path: metadata?.Path || "./documents"
-          }
-        };
-
         try {
-          const res = await fetch("http://localhost:8080/data/create", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.message || "Failed to create document");
-          console.log("Document created in DB:", data);
+          const response = JSON.parse(xhr.responseText);
+          console.log("Upload successful:", response);
+          
+          // Show success message with file path and document UUID
+          if (response.document_uuid) {
+            console.log(`File uploaded successfully! Path: ${response.file_path}, Document UUID: ${response.document_uuid}`);
+          } else {
+            console.log(`File uploaded successfully! Path: ${response.file_path}`);
+          }
+          
+          uploadSuccess = true;
           resolve();
         } catch (err) {
-          console.error("Failed to create document:", err);
-          reject(err);
+          console.error("Failed to parse response:", err);
+          uploadError = "Invalid response format";
+          reject(new Error("Invalid response format"));
         }
-
       } else {
         console.error("Upload failed:", xhr.responseText);
+        uploadError = `Upload failed: ${xhr.status}`;
         reject(new Error(`Upload failed: ${xhr.status}`));
       }
     };
 
     xhr.onerror = () => {
       uploading = false;
+      uploadError = "Network error";
       console.error("Network error");
       reject(new Error("Network error"));
     };
@@ -157,7 +158,6 @@ async function uploadFile(file: File, metadata?: any): Promise<void> {
     metadataTitle = '';
     metadataAuthor = '';
     metadataDocType = '';
-    metadataPath = '';
     metadataContent = '';
   }
     function handleUpload() {
@@ -166,7 +166,6 @@ async function uploadFile(file: File, metadata?: any): Promise<void> {
                 Title: metadataTitle,
                 Author: metadataAuthor,
                 DocType: metadataDocType,
-                Path: metadataPath,
                 Content: metadataContent
         });
     }
@@ -177,7 +176,7 @@ async function uploadFile(file: File, metadata?: any): Promise<void> {
   <div class="upload-section">
     <h2 class="section-title">Upload File</h2>
     <p class="section-description">
-      Drag and drop a file here, or click "Choose File" to browse.
+      Drag and drop a file here, or click "Choose File" to browse. Files will be automatically saved with unique names and can be linked to database records.
     </p>
 
     <div
@@ -221,10 +220,7 @@ async function uploadFile(file: File, metadata?: any): Promise<void> {
             Doc Type:
             <input type="text" bind:value={metadataDocType} placeholder="Notes" />
           </label>
-          <label>
-            Path:
-            <input type="text" bind:value={metadataPath} placeholder="./documents" />
-          </label>
+          
           <label>
             Content (optional):
             <textarea bind:value={metadataContent} placeholder="Optional content for the document"></textarea>
@@ -248,10 +244,33 @@ async function uploadFile(file: File, metadata?: any): Promise<void> {
 
     {#if selectedFile}
       <div class="upload-actions">
+        {#if uploadSuccess}
+          <div class="success-message">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="20,6 9,17 4,12"></polyline>
+            </svg>
+            <span>File uploaded successfully!</span>
+          </div>
+        {:else if uploadError}
+          <div class="error-message">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="15" y1="9" x2="9" y2="15"></line>
+              <line x1="9" y1="9" x2="15" y2="15"></line>
+            </svg>
+            <span>{uploadError}</span>
+          </div>
+        {/if}
+        
         <button
           class="upload-button"
           class:uploading={uploading}
-          on:click={() => selectedFile && uploadFile(selectedFile)}
+          on:click={() => selectedFile && uploadFile(selectedFile, {
+            Title: metadataTitle,
+            Author: metadataAuthor,
+            DocType: metadataDocType,
+            Content: metadataContent
+          })}
           disabled={uploading}
         >
           {#if uploading}
@@ -443,6 +462,30 @@ async function uploadFile(file: File, metadata?: any): Promise<void> {
 
   .upload-actions {
     margin-top: 24px;
+  }
+
+  .success-message {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(52, 199, 89, 0.1);
+    color: #34C759;
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    border: 1px solid rgba(52, 199, 89, 0.2);
+  }
+
+  .error-message {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 59, 48, 0.1);
+    color: #FF3B30;
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    border: 1px solid rgba(255, 59, 48, 0.2);
   }
 
   .upload-button {
