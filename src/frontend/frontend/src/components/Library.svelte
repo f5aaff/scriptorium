@@ -263,17 +263,17 @@
     function fallbackDownload(blob: Blob, filename: string) {
     // Create a blob URL
     const blobUrl = window.URL.createObjectURL(blob);
-    
+
     // Create a temporary anchor element
     const link = document.createElement('a');
     link.href = blobUrl;
     link.download = filename;
     link.style.display = 'none';
-    
+
     // Append to body, click, and clean up
     document.body.appendChild(link);
     link.click();
-    
+
     // Clean up after a delay
     setTimeout(() => {
       document.body.removeChild(link);
@@ -284,16 +284,16 @@
   async function deleteItem(item: LibraryItem) {
     try {
       console.log(`Deleting item: ${item.Title} (${item.Uuid})`);
-      
+
       // Show confirmation dialog
       if (!confirm(`Are you sure you want to delete "${item.Title}"? This action cannot be undone.`)) {
         return;
       }
-      
+
       // Call the delete API
       const requestBody = { uuids: [item.Uuid] };
       console.log('Sending delete request:', requestBody);
-      
+
       const response = await fetch('http://localhost:8080/data/delete', {
         method: 'DELETE',
         headers: {
@@ -301,21 +301,21 @@
         },
         body: JSON.stringify(requestBody)
       });
-      
+
       const result = await response.json();
       console.log('Delete result:', result);
-      
+
       if (!response.ok) {
         // Check if any items were actually deleted
         if (result.deleted_count > 0) {
           // Some items were deleted successfully, but there were also errors
           console.warn('Partial deletion:', result);
-          
+
           // Check if the error was just about file deletion
-          const hasFileErrors = result.errors && result.errors.some(error => 
+          const hasFileErrors = result.errors && result.errors.some(error =>
             error.includes('Failed to delete file') || error.includes('file')
           );
-          
+
           if (hasFileErrors) {
             alert(`Warning: "${item.Title}" was removed from the library, but the physical file could not be deleted. This is usually not a problem.`);
           } else {
@@ -330,16 +330,16 @@
         // Complete success
         alert(`Successfully deleted "${item.Title}"`);
       }
-      
+
       // Remove the item from the local lists
       items = items.filter(libItem => libItem.Uuid !== item.Uuid);
       filteredItems = filteredItems.filter(libItem => libItem.Uuid !== item.Uuid);
-      
+
       // Close the detail view if the deleted item was selected
       if (selectedItem && selectedItem.Uuid === item.Uuid) {
         selectedItem = null;
       }
-      
+
     } catch (error) {
       console.error('Error deleting item:', error);
       alert(`Delete failed: ${error.message}`);
