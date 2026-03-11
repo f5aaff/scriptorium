@@ -1,3 +1,5 @@
 *.db
-./src/scriptorium
+/src/backend/scriptorium
 */*/.env
+src/frontend/frontend/package-lock.json
+src/frontend/wailsjs
