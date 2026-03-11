@@ -4,6 +4,10 @@
 
 This is the official Wails Svelte-TS template.
 
+## Dependencies
+
+- [wails](https://wails.io/docs/gettingstarted/installation)
+
 ## Live Development
 
 To run in live development mode, run `wails dev` in the project directory. This will run a Vite development
