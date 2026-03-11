@@ -63,9 +63,8 @@ func main() {
 
 	f := fao.NewLocalFao(cfg.Storage.Path)
 
-	// Wire up the Pandoc converter
 	pandocConverter := converter.NewPandocConverterWithInterfaces("pandoc", d, f)
-	_ = service.NewFileConverterService(pandocConverter, f)
+	_ = service.NewFileConverterService(pandocConverter, f) // registered for potential direct use
 
 	apiHandler := service.NewAPIHandler(daos, docFactory, f)
 
@@ -90,7 +89,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	fileHandler := service.NewFileHandler(faos, conn, apiHandler)
+	fileHandler := service.NewFileHandler(faos, conn, apiHandler, pandocConverter)
 
 	//---------------------------------------------------
 	//-------------------SERVICE-START-------------------

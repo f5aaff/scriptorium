@@ -181,6 +181,10 @@ func (ds *DaoService) SearchByKeyValue(key, value string) ([]dao.MetaData, error
 	return docs, nil
 }
 
+func (ds *DaoService) FuzzySearch(query string) ([]dao.MetaData, error) {
+	return ds.dao.FuzzySearch(query)
+}
+
 func (ds *DaoService) Connect(params dao.ConnectParams) error {
 	return ds.dao.Connect(params)
 }

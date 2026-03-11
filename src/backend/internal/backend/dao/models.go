@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/boltdb/bolt"
 	"github.com/google/uuid"
@@ -25,6 +26,7 @@ type DAO interface {
 	Read(*Document, uuid.UUID) (Document, error)
 	ReadRaw(uuid.UUID) ([]byte, error)
 	SearchByKeyValue(key, value string) ([]MetaData, error)
+	FuzzySearch(query string) ([]MetaData, error)
 	GetAll() ([]MetaData, error)
 	Update(Document) error
 	Delete(uuid.UUID) error
@@ -252,6 +254,53 @@ func (b *BoltDao) GetAll() ([]MetaData, error) {
 	return results, nil
 }
 
+func (b *BoltDao) FuzzySearch(query string) ([]MetaData, error) {
+	var results []MetaData
+	query = strings.ToLower(query)
+
+	err := b.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("documents"))
+		if bucket == nil {
+			return fmt.Errorf("documents bucket does not exist")
+		}
+
+		c := bucket.Cursor()
+		for _, v := c.First(); v != nil; _, v = c.Next() {
+			var metaData MetaData
+			if err := json.Unmarshal(v, &metaData); err != nil {
+				return fmt.Errorf("error unmarshaling document: %v", err)
+			}
+
+			if fuzzyMatchMetaData(metaData, query) {
+				results = append(results, metaData)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error searching documents: %v", err)
+	}
+
+	return results, nil
+}
+
+func fuzzyMatchMetaData(meta MetaData, query string) bool {
+	fields := []string{
+		meta.Title,
+		meta.Author,
+		meta.DocType,
+		meta.FileType,
+		meta.DeweyDecimal,
+		meta.PublishDate,
+	}
+	for _, field := range fields {
+		if field != "" && strings.Contains(strings.ToLower(field), query) {
+			return true
+		}
+	}
+	return false
+}
+
 // Helper function to check if metadata struct contains the key-value pair
 func metaDataMatches(metaData MetaData, key, value string) bool {
 	metaValue, err := getStructFieldValue(metaData, key)
@@ -294,14 +343,15 @@ func getStructFieldValue(metaData MetaData, fieldName string) (string, error) {
 // basic struct, contains generic information
 // regarding the document it references.
 type MetaData struct {
-	Title       string
-	Author      string
-	PublishDate string
-	LastUpdated string
-	FileType    string
-	DocType     string
-	Path        string
-	Uuid        string
+	Title        string
+	Author       string
+	PublishDate  string
+	LastUpdated  string
+	FileType     string
+	DocType      string
+	DeweyDecimal string
+	Path         string
+	Uuid         string
 }
 
 //---------------------------------------------------
@@ -334,6 +384,15 @@ func (f *DocumentFactory) NewDocument(docType string) (Document, error) {
 		return factory(), nil
 	}
 	return nil, fmt.Errorf("unknown document type: %s", docType)
+}
+
+// GetRegisteredTypes returns a list of all registered document type names.
+func (f *DocumentFactory) GetRegisteredTypes() []string {
+	types := make([]string, 0, len(f.registry))
+	for docType := range f.registry {
+		types = append(types, docType)
+	}
+	return types
 }
 
 //---------------------------------------------------

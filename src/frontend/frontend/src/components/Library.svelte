@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import ItemCard from './ItemCard.svelte';
+  import EditModal from './EditModal.svelte';
   import { API_BASE_URL } from '../config';
 
   interface LibraryItem {
@@ -10,6 +11,7 @@
     LastUpdated: string;
     FileType: string;
     DocType: string;
+    DeweyDecimal: string;
     Path: string;
     Uuid: string;
   }
@@ -39,13 +41,17 @@
   let searchValue = '';
   let searchTimeout: number | null = null;
   let isInitialLoad = true;
+  let editingItem: LibraryItem | null = null;
+  let converting = false;
 
-  async function fetchItems(pageNum: number, searchKeyParam?: string, searchValueParam?: string): Promise<{ items: LibraryItem[], hasMore: boolean }> {
+  async function fetchItems(pageNum: number, searchKeyParam?: string, searchValueParam?: string, fuzzyQuery?: string): Promise<{ items: LibraryItem[], hasMore: boolean }> {
     const params = new URLSearchParams();
     params.append('page', pageNum.toString());
     params.append('limit', '20');
 
-    if (searchKeyParam && searchValueParam) {
+    if (fuzzyQuery) {
+      params.append('q', fuzzyQuery);
+    } else if (searchKeyParam && searchValueParam) {
       params.append('key', searchKeyParam);
       params.append('value', searchValueParam);
     }
@@ -74,21 +80,29 @@
 
     loading = true;
     try {
-      let key = 'Title';
-      let value = searchQuery;
+      let key = '';
+      let value = '';
+      let fuzzy = '';
 
-      if (searchQuery.toLowerCase().includes('author:')) {
+      if (searchQuery.toLowerCase().startsWith('author:')) {
         key = 'Author';
-        value = searchQuery.replace(/author:\s*/i, '');
-      } else if (searchQuery.toLowerCase().includes('type:')) {
+        value = searchQuery.replace(/^author:\s*/i, '');
+      } else if (searchQuery.toLowerCase().startsWith('type:')) {
         key = 'DocType';
-        value = searchQuery.replace(/type:\s*/i, '');
-      } else if (searchQuery.toLowerCase().includes('filetype:')) {
+        value = searchQuery.replace(/^type:\s*/i, '');
+      } else if (searchQuery.toLowerCase().startsWith('filetype:')) {
         key = 'FileType';
-        value = searchQuery.replace(/filetype:\s*/i, '');
+        value = searchQuery.replace(/^filetype:\s*/i, '');
+      } else if (searchQuery.toLowerCase().startsWith('dewey:')) {
+        key = 'DeweyDecimal';
+        value = searchQuery.replace(/^dewey:\s*/i, '');
+      } else {
+        fuzzy = searchQuery;
       }
 
-      const { items: searchResults, hasMore: hasMoreResults } = await fetchItems(1, key, value);
+      const { items: searchResults, hasMore: hasMoreResults } = fuzzy
+        ? await fetchItems(1, undefined, undefined, fuzzy)
+        : await fetchItems(1, key, value);
 
       items = searchResults;
       filteredItems = searchResults;
@@ -184,6 +198,48 @@
     } catch (error) {
       alert(`Failed to open file: ${error.message}`);
     }
+  }
+
+  async function convertToPdf(item: LibraryItem) {
+    if (item.FileType === '.pdf') {
+      await openItem(item);
+      return;
+    }
+    converting = true;
+    try {
+      const response = await fetch(`${API_BASE_URL}/file/convert/${item.Uuid}?format=pdf`);
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Conversion failed (${response.status})`);
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    } catch (error) {
+      alert(`PDF conversion failed: ${error.message}`);
+    } finally {
+      converting = false;
+    }
+  }
+
+  function openEditModal(item: LibraryItem) {
+    editingItem = item;
+  }
+
+  async function handleEditSave() {
+    const savedItem = editingItem;
+    editingItem = null;
+    showCard = false;
+    selectedItem = null;
+    items = [];
+    filteredItems = [];
+    page = 1;
+    hasMore = true;
+    await loadMoreItems();
+  }
+
+  function handleEditCancel() {
+    editingItem = null;
   }
 
   async function downloadItem(item: LibraryItem) {
@@ -311,7 +367,7 @@
       </svg>
       <input
         type="text"
-        placeholder="Search by title, author, or type... (e.g., author:John, type:Notes)"
+        placeholder="Search... (or use author:, type:, dewey: prefixes)"
         bind:value={searchQuery}
         on:focus={() => searchFocused = true}
         on:blur={() => searchFocused = false}
@@ -414,6 +470,12 @@
               <span class="label">Last Updated:</span>
               <span>{new Date(selectedItem.LastUpdated).toLocaleDateString()}</span>
             </div>
+            {#if selectedItem.DeweyDecimal}
+              <div class="detail-row">
+                <span class="label">Dewey:</span>
+                <span>{selectedItem.DeweyDecimal}</span>
+              </div>
+            {/if}
             <div class="detail-row">
               <span class="label">Path:</span>
               <span class="path">{selectedItem.Path}</span>
@@ -426,12 +488,24 @@
 
           <div class="card-actions">
             <button class="action-button primary" on:click={() => openItem(selectedItem)}>Open</button>
+            <button class="action-button accent" on:click={() => convertToPdf(selectedItem)} disabled={converting}>
+              {converting ? 'Converting...' : 'View as PDF'}
+            </button>
+            <button class="action-button" on:click={() => openEditModal(selectedItem)}>Edit</button>
             <button class="action-button" on:click={() => downloadItem(selectedItem)}>Download</button>
-            <button class="action-button" on:click={() => deleteItem(selectedItem)}>Delete</button>
+            <button class="action-button danger" on:click={() => deleteItem(selectedItem)}>Delete</button>
           </div>
         </div>
       </div>
     </div>
+  {/if}
+
+  {#if editingItem}
+    <EditModal
+      item={editingItem}
+      onSave={handleEditSave}
+      onCancel={handleEditCancel}
+    />
   {/if}
 </div>
 
@@ -755,7 +829,8 @@
 
   .card-actions {
     display: flex;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .action-button {
@@ -778,13 +853,36 @@
     background: #0056CC;
   }
 
-  .action-button:not(.primary) {
+  .action-button.accent {
+    background: rgba(88, 86, 214, 0.2);
+    color: #5856D6;
+  }
+
+  .action-button.accent:hover:not(:disabled) {
+    background: rgba(88, 86, 214, 0.35);
+  }
+
+  .action-button.danger {
+    background: rgba(255, 59, 48, 0.15);
+    color: #FF3B30;
+  }
+
+  .action-button.danger:hover {
+    background: rgba(255, 59, 48, 0.3);
+  }
+
+  .action-button:not(.primary):not(.accent):not(.danger) {
     background: rgba(255, 255, 255, 0.1);
     color: #ffffff;
   }
 
-  .action-button:not(.primary):hover {
+  .action-button:not(.primary):not(.accent):not(.danger):hover {
     background: rgba(255, 255, 255, 0.2);
+  }
+
+  .action-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 
   @media (max-width: 768px) {

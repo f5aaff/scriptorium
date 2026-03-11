@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"scriptorium/internal/backend/converter"
 	"scriptorium/internal/backend/dao"
 	"scriptorium/internal/backend/fao"
 	"scriptorium/internal/backend/service/pb"
@@ -52,17 +53,19 @@ type FileHandler struct {
 	FaoService        FileHandlerService
 	FileServiceClient pb.FileServiceClient
 	APIHandler        *APIHandler
+	Converter         converter.Converter
 }
 
 func (f *FileHandler) GetService() any {
 	return f.FaoService
 }
 
-func NewFileHandler(faos FileHandlerService, conn *grpc.ClientConn, apiHandler *APIHandler) *FileHandler {
+func NewFileHandler(faos FileHandlerService, conn *grpc.ClientConn, apiHandler *APIHandler, conv converter.Converter) *FileHandler {
 	return &FileHandler{
 		FaoService:        faos,
 		FileServiceClient: pb.NewFileServiceClient(conn),
 		APIHandler:        apiHandler,
+		Converter:         conv,
 	}
 }
 
@@ -191,6 +194,9 @@ func (f FileHandler) UploadFile(c *gin.Context) {
 		if publishDate, ok := metadata["PublishDate"].(string); ok {
 			meta.PublishDate = publishDate
 		}
+		if dewey, ok := metadata["DeweyDecimal"].(string); ok {
+			meta.DeweyDecimal = dewey
+		}
 
 		err = doc.SetMetaData(meta)
 		if err != nil {
@@ -296,13 +302,79 @@ func (f FileHandler) DownloadFile(c *gin.Context) {
 		}
 	}
 }
+func (f FileHandler) ConvertFile(c *gin.Context) {
+	uuidStr := c.Param("uuid")
+	if uuidStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing UUID parameter"})
+		return
+	}
+
+	format := c.DefaultQuery("format", "pdf")
+
+	parsedUUID, err := uuid.Parse(uuidStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid UUID format"})
+		return
+	}
+
+	rawData, err := f.APIHandler.DaoService.ReadRaw(parsedUUID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
+		return
+	}
+
+	var metadata dao.MetaData
+	if err := json.Unmarshal(rawData, &metadata); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse document metadata"})
+		return
+	}
+
+	if metadata.Path == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File path not found in document metadata"})
+		return
+	}
+
+	outputPath, err := f.Converter.ConvertDocumentByUUID(uuidStr, strings.TrimPrefix(metadata.FileType, "."), format)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Conversion failed", "output": err.Error()})
+		return
+	}
+
+	file, err := f.APIHandler.FaoService.GetFile(outputPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve converted file"})
+		return
+	}
+	defer file.Close()
+
+	contentType := "application/octet-stream"
+	switch format {
+	case "pdf":
+		contentType = "application/pdf"
+	case "html":
+		contentType = "text/html"
+	case "docx":
+		contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	}
+
+	downloadName := metadata.Title
+	if downloadName == "" {
+		downloadName = "converted"
+	}
+	downloadName += "." + format
+
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=%s", downloadName))
+	io.Copy(c.Writer, file)
+}
+
 func (f *FileHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 	groupName := "/file"
 
-	// Define the routes and corresponding handlers
 	routes := map[string]gin.HandlerFunc{
 		"POST /upload":        f.UploadFile,
 		"GET /download/:uuid": f.DownloadFile,
+		"GET /convert/:uuid":  f.ConvertFile,
 	}
 
 	return groupName, routes
@@ -327,13 +399,12 @@ func NewAPIHandler(daos DaoService, documentFactory *dao.DocumentFactory, faoSer
 }
 
 func (h *APIHandler) SearchByKeyValue(c *gin.Context) {
-	// Get query parameters
+	query := c.Query("q")
 	key := c.Query("key")
 	value := c.Query("value")
 	pageStr := c.DefaultQuery("page", "1")
 	limitStr := c.DefaultQuery("limit", "10")
 
-	// Parse pagination parameters
 	page, err := strconv.Atoi(pageStr)
 	if err != nil || page < 1 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page parameter. Must be a positive integer."})
@@ -349,7 +420,12 @@ func (h *APIHandler) SearchByKeyValue(c *gin.Context) {
 	var results []dao.MetaData
 	var totalCount int
 
-	allResults, err := h.DaoService.SearchByKeyValue(key, value)
+	var allResults []dao.MetaData
+	if query != "" {
+		allResults, err = h.DaoService.FuzzySearch(query)
+	} else {
+		allResults, err = h.DaoService.SearchByKeyValue(key, value)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -428,6 +504,9 @@ func (h *APIHandler) Create(c *gin.Context) {
 	}
 	if publishDate, ok := reqData["PublishDate"].(string); ok {
 		meta.PublishDate = publishDate
+	}
+	if dewey, ok := reqData["DeweyDecimal"].(string); ok {
+		meta.DeweyDecimal = dewey
 	}
 	err = doc.SetMetaData(meta)
 	if err != nil {
@@ -510,6 +589,15 @@ func (h *APIHandler) Update(c *gin.Context) {
 	}
 	if publishDate, ok := reqData["PublishDate"].(string); ok {
 		meta.PublishDate = publishDate
+	}
+	if dewey, ok := reqData["DeweyDecimal"].(string); ok {
+		meta.DeweyDecimal = dewey
+	}
+	if path, ok := reqData["Path"].(string); ok {
+		meta.Path = path
+	}
+	if fileType, ok := reqData["FileType"].(string); ok {
+		meta.FileType = fileType
 	}
 	if err := doc.SetMetaData(meta); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to set metadata"})
@@ -604,16 +692,26 @@ func (h *APIHandler) Delete(c *gin.Context) {
 	}
 }
 
+func (h *APIHandler) GetDocumentTypes(c *gin.Context) {
+	types := h.DocumentFactory.GetRegisteredTypes()
+	c.JSON(http.StatusOK, gin.H{"types": types})
+}
+
+func (h *APIHandler) GetDeweyCategories(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"categories": dao.DeweyCategories})
+}
+
 func (h *APIHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 	groupName := "/data"
 
-	// Define the routes and corresponding handlers
 	routes := map[string]gin.HandlerFunc{
 		"POST /create":    h.Create,
 		"GET /read/:uuid": h.Read,
 		"PUT /update":     h.Update,
 		"GET /search":     h.SearchByKeyValue,
 		"DELETE /delete":  h.Delete,
+		"GET /types":      h.GetDocumentTypes,
+		"GET /dewey":      h.GetDeweyCategories,
 	}
 
 	return groupName, routes
