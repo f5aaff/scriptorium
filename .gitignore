@@ -3,3 +3,6 @@
 */*/.env
 src/frontend/frontend/package-lock.json
 src/frontend/wailsjs
+src/backend/storage
+src/frontend/frontend/wailsjs/runtime
+
