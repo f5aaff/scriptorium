@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import { API_BASE_URL } from '../config';
 
   const dispatch = createEventDispatcher();
 
@@ -102,7 +103,7 @@ async function uploadFile(file: File, metadata?: any): Promise<void> {
     }
 
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "http://localhost:8080/file/upload", true);
+    xhr.open("POST", `${API_BASE_URL}/file/upload`, true);
 
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {
@@ -114,25 +115,14 @@ async function uploadFile(file: File, metadata?: any): Promise<void> {
       uploading = false;
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
-          const response = JSON.parse(xhr.responseText);
-          console.log("Upload successful:", response);
-          
-          // Show success message with file path and document UUID
-          if (response.document_uuid) {
-            console.log(`File uploaded successfully! Path: ${response.file_path}, Document UUID: ${response.document_uuid}`);
-          } else {
-            console.log(`File uploaded successfully! Path: ${response.file_path}`);
-          }
-          
+          JSON.parse(xhr.responseText);
           uploadSuccess = true;
           resolve();
         } catch (err) {
-          console.error("Failed to parse response:", err);
           uploadError = "Invalid response format";
           reject(new Error("Invalid response format"));
         }
       } else {
-        console.error("Upload failed:", xhr.responseText);
         uploadError = `Upload failed: ${xhr.status}`;
         reject(new Error(`Upload failed: ${xhr.status}`));
       }
@@ -141,7 +131,6 @@ async function uploadFile(file: File, metadata?: any): Promise<void> {
     xhr.onerror = () => {
       uploading = false;
       uploadError = "Network error";
-      console.error("Network error");
       reject(new Error("Network error"));
     };
 
@@ -598,6 +587,50 @@ async function uploadFile(file: File, metadata?: any): Promise<void> {
 
   .upload-tips li {
     margin-bottom: 4px;
+  }
+
+  .metadata-form {
+    margin-top: 16px;
+    width: 100%;
+  }
+
+  .metadata-form h4 {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+
+  .metadata-form label {
+    display: block;
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 14px;
+    margin-bottom: 12px;
+  }
+
+  .metadata-form input,
+  .metadata-form textarea {
+    width: 100%;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    color: #ffffff;
+    font-size: 14px;
+    margin-top: 4px;
+    font-family: inherit;
+  }
+
+  .metadata-form input:focus,
+  .metadata-form textarea:focus {
+    outline: none;
+    border-color: #007AFF;
+    background: rgba(255, 255, 255, 0.15);
+  }
+
+  .metadata-form textarea {
+    min-height: 80px;
+    resize: vertical;
   }
 
   @media (max-width: 768px) {

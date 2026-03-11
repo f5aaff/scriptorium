@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"scriptorium/internal/backend/config"
+	"scriptorium/internal/backend/converter"
 	"scriptorium/internal/backend/dao"
 	"scriptorium/internal/backend/fao"
 	"scriptorium/internal/backend/service"
@@ -34,6 +36,11 @@ func main() {
 
 	docFactory := dao.NewDocumentFactory()
 	docFactory.RegisterDocumentType("Notes", func() dao.Document { return &dao.Notes{} })
+	docFactory.RegisterDocumentType("Book", func() dao.Document { return &dao.Notes{} })
+	docFactory.RegisterDocumentType("Article", func() dao.Document { return &dao.Notes{} })
+	docFactory.RegisterDocumentType("Report", func() dao.Document { return &dao.Notes{} })
+	docFactory.RegisterDocumentType("Manual", func() dao.Document { return &dao.Notes{} })
+	docFactory.RegisterDocumentType("Reference", func() dao.Document { return &dao.Notes{} })
 
 	daoService := service.DaoService{}
 	daoServ, err := daoService.New(d)
@@ -56,10 +63,17 @@ func main() {
 
 	f := fao.NewLocalFao(cfg.Storage.Path)
 
+	// Wire up the Pandoc converter
+	pandocConverter := converter.NewPandocConverterWithInterfaces("pandoc", d, f)
+	_ = service.NewFileConverterService(pandocConverter, f)
+
 	apiHandler := service.NewAPIHandler(daos, docFactory, f)
 
 	fileHandlerService := service.FileHandlerService{}
 	fhServ, err := fileHandlerService.New(f)
+	if err != nil {
+		log.Fatalf("error instantiating FileHandlerService: %s", err.Error())
+	}
 
 	faos, ok := fhServ.(service.FileHandlerService)
 	if !ok {
@@ -67,11 +81,10 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer()
-	grpcErrCh := service.StartGrcpService(grpcServer, faos)
-	grpcSignalCh := make(chan os.Signal, 1)
-	signal.Notify(grpcSignalCh, syscall.SIGINT, syscall.SIGTERM)
+	grpcErrCh := service.StartGrcpService(grpcServer, faos, cfg.Server.GrpcPort)
 
-	conn, err := grpc.NewClient("localhost:5001", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	grpcAddr := fmt.Sprintf("localhost:%d", cfg.Server.GrpcPort)
+	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("failed to connect to gRPC server: %v", err)
 	}
@@ -84,27 +97,27 @@ func main() {
 	//---------------------------------------------------
 
 	// Call StartRestAPI with handlers
-	errCh := service.StartRestAPI(apiHandler, fileHandler)
+	errCh := service.StartRestAPI(cfg.Server.RestPort, apiHandler, fileHandler)
+
 	// Set up graceful shutdown
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Handle errors in a non-blocking way
 	select {
 	case err := <-errCh:
 		if err != nil {
-			log.Fatalf("API Error: %v", err)
+			log.Fatalf("REST API Error: %v", err)
+		}
+	case err := <-grpcErrCh:
+		if err != nil {
+			log.Fatalf("gRPC Error: %v", err)
 		}
 	case sig := <-signalCh:
 		log.Printf("Received shutdown signal: %s", sig)
-		// Handle graceful shutdown
-
-	case err := <-grpcErrCh:
-		if err != nil {
-			log.Fatalf("API Error: %v", err)
+		grpcServer.GracefulStop()
+		if err := d.Disconnect(); err != nil {
+			log.Printf("Error closing database: %v", err)
 		}
-	case sig := <-grpcSignalCh:
-		log.Printf("Received shutdown signal: %s", sig)
-		// Handle graceful shutdown
+		log.Println("Shutdown complete")
 	}
 }

@@ -62,7 +62,6 @@ func (b *BoltDao) Connect(cp ConnectParams) error {
 		return fmt.Errorf("connection parameters do not conform to BoltConnectionParams type")
 	}
 	// connect to given db
-	// TODO: template out db path and permissions to environment variables
 	db, err := bolt.Open(params.Path, params.Mode, params.Opts)
 	if err != nil {
 		return fmt.Errorf("failed to open DB: %v", err)
@@ -145,7 +144,7 @@ func (b *BoltDao) Read(doc *Document, id uuid.UUID) (Document, error) {
 		// get by UUID
 		data := bucket.Get([]byte(id.String()))
 		if data == nil {
-			return fmt.Errorf("docment not found")
+			return fmt.Errorf("document not found")
 		}
 
 		// unmarshal the metadata from the JSON response

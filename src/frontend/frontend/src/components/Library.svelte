@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import ItemCard from './ItemCard.svelte';
+  import { API_BASE_URL } from '../config';
 
   interface LibraryItem {
     Title: string;
@@ -39,57 +40,43 @@
   let searchTimeout: number | null = null;
   let isInitialLoad = true;
 
-  // API function to fetch items from the search endpoint
   async function fetchItems(pageNum: number, searchKeyParam?: string, searchValueParam?: string): Promise<{ items: LibraryItem[], hasMore: boolean }> {
     const params = new URLSearchParams();
     params.append('page', pageNum.toString());
-    params.append('limit', '20'); // Default limit
+    params.append('limit', '20');
 
     if (searchKeyParam && searchValueParam) {
       params.append('key', searchKeyParam);
       params.append('value', searchValueParam);
     }
 
-    const url = `http://localhost:8080/data/search?${params.toString()}`;
-    console.log('Fetching items from URL:', url);
+    const url = `${API_BASE_URL}/data/search?${params.toString()}`;
 
-    try {
-      const response = await fetch(url);
+    const response = await fetch(url);
 
-      if (!response.ok) {
-        console.error('API response not ok:', response.status, response.statusText);
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data: SearchResponse = await response.json();
-      console.log('API Response:', data);
-      console.log('Results count:', data.results?.length || 0);
-
-      return {
-        items: data.results || [],
-        hasMore: data.has_next || false
-      };
-    } catch (error) {
-      console.error('Error fetching items:', error);
-      throw error;
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
+
+    const data: SearchResponse = await response.json();
+
+    return {
+      items: data.results || [],
+      hasMore: data.has_next || false
+    };
   }
 
-  // Search function that uses the API
   async function performSearch() {
     if (!searchQuery.trim()) {
-      // If no search query, load all items
       await loadMoreItems();
       return;
     }
 
     loading = true;
     try {
-      // Try to determine search key based on query content
-      let key = 'Title'; // Default to title search
+      let key = 'Title';
       let value = searchQuery;
 
-      // Simple heuristic to determine search type
       if (searchQuery.toLowerCase().includes('author:')) {
         key = 'Author';
         value = searchQuery.replace(/author:\s*/i, '');
@@ -108,32 +95,25 @@
       hasMore = hasMoreResults;
       page = 1;
     } catch (error) {
-      console.error('Error performing search:', error);
+      console.error('Search failed:', error);
     } finally {
       loading = false;
     }
   }
 
-  // Update filtered items when search query changes
   $: {
-    console.log('Reactive statement triggered, searchQuery:', searchQuery, 'isInitialLoad:', isInitialLoad);
     if (searchQuery.trim()) {
-      // Clear existing timeout
       if (searchTimeout) {
         clearTimeout(searchTimeout);
       }
-
-      // Set new timeout for debounced search
       searchTimeout = setTimeout(() => {
         performSearch();
       }, 300);
     } else if (!isInitialLoad) {
-      // Clear search and load all items (but not on initial load)
       if (searchTimeout) {
         clearTimeout(searchTimeout);
         searchTimeout = null;
       }
-      console.log('Clearing items and loading all items');
       items = [];
       filteredItems = [];
       page = 1;
@@ -145,27 +125,20 @@
   async function loadMoreItems() {
     if (loading || !hasMore) return;
 
-    console.log('Loading more items, page:', page, 'hasMore:', hasMore);
     loading = true;
     try {
       const { items: newItems, hasMore: hasMoreResults } = await fetchItems(page);
 
-      console.log('Received new items:', newItems.length);
-      console.log('New items:', newItems);
-
       if (newItems.length === 0) {
         hasMore = false;
-        console.log('No more items, setting hasMore to false');
       } else {
         items = [...items, ...newItems];
         filteredItems = [...filteredItems, ...newItems];
         page++;
         hasMore = hasMoreResults;
-        console.log('Updated items array length:', items.length);
-        console.log('Updated filteredItems array length:', filteredItems.length);
       }
     } catch (error) {
-      console.error('Error loading items:', error);
+      console.error('Failed to load items:', error);
     } finally {
       loading = false;
     }
@@ -194,7 +167,6 @@
     searchQuery = '';
     searchKey = '';
     searchValue = '';
-    // Reset to load all items
     items = [];
     filteredItems = [];
     page = 1;
@@ -202,31 +174,37 @@
     loadMoreItems();
   }
 
+  async function openItem(item: LibraryItem) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/file/download/${item.Uuid}`);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    } catch (error) {
+      alert(`Failed to open file: ${error.message}`);
+    }
+  }
+
   async function downloadItem(item: LibraryItem) {
     try {
-      console.log(`Downloading file: ${item.Title} (${item.Uuid})`);
-
-      // Fetch the file as a blob
-      const response = await fetch(`http://localhost:8080/file/download/${item.Uuid}`);
+      const response = await fetch(`${API_BASE_URL}/file/download/${item.Uuid}`);
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      // Get the blob from the response
       const blob = await response.blob();
 
       if (blob.size === 0) {
         throw new Error('Received empty file');
       }
 
-      // Create filename with proper extension
       let filename = item.Title || item.Uuid;
       if (item.FileType && !filename.includes('.')) {
         filename += `.${item.FileType}`;
       }
 
-      // Use the modern File System Access API to show save dialog
       if ('showSaveFilePicker' in window) {
         try {
           const fileHandle = await (window as any).showSaveFilePicker({
@@ -242,39 +220,26 @@
           const writable = await fileHandle.createWritable();
           await writable.write(blob);
           await writable.close();
-
-          console.log('File saved successfully');
         } catch (saveError) {
-          console.log('User cancelled save or File System Access API failed, falling back to download link');
-          // Fall back to download link method
           fallbackDownload(blob, filename);
         }
       } else {
-        // Fall back for browsers that don't support File System Access API
         fallbackDownload(blob, filename);
       }
 
     } catch (error) {
-      console.error('Error downloading file:', error);
       alert(`Download failed: ${error.message}`);
     }
   }
 
-    function fallbackDownload(blob: Blob, filename: string) {
-    // Create a blob URL
+  function fallbackDownload(blob: Blob, filename: string) {
     const blobUrl = window.URL.createObjectURL(blob);
-
-    // Create a temporary anchor element
     const link = document.createElement('a');
     link.href = blobUrl;
     link.download = filename;
     link.style.display = 'none';
-
-    // Append to body, click, and clean up
     document.body.appendChild(link);
     link.click();
-
-    // Clean up after a delay
     setTimeout(() => {
       document.body.removeChild(link);
       window.URL.revokeObjectURL(blobUrl);
@@ -283,18 +248,13 @@
 
   async function deleteItem(item: LibraryItem) {
     try {
-      console.log(`Deleting item: ${item.Title} (${item.Uuid})`);
-
-      // Show confirmation dialog
       if (!confirm(`Are you sure you want to delete "${item.Title}"? This action cannot be undone.`)) {
         return;
       }
 
-      // Call the delete API
       const requestBody = { uuids: [item.Uuid] };
-      console.log('Sending delete request:', requestBody);
 
-      const response = await fetch('http://localhost:8080/data/delete', {
+      const response = await fetch(`${API_BASE_URL}/data/delete`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
@@ -303,53 +263,41 @@
       });
 
       const result = await response.json();
-      console.log('Delete result:', result);
 
       if (!response.ok) {
-        // Check if any items were actually deleted
         if (result.deleted_count > 0) {
-          // Some items were deleted successfully, but there were also errors
-          console.warn('Partial deletion:', result);
-
-          // Check if the error was just about file deletion
           const hasFileErrors = result.errors && result.errors.some(error =>
             error.includes('Failed to delete file') || error.includes('file')
           );
 
           if (hasFileErrors) {
-            alert(`Warning: "${item.Title}" was removed from the library, but the physical file could not be deleted. This is usually not a problem.`);
+            alert(`Warning: "${item.Title}" was removed from the library, but the physical file could not be deleted.`);
           } else {
-            alert(`Warning: "${item.Title}" was deleted with some issues. Check console for details.`);
+            alert(`Warning: "${item.Title}" was deleted with some issues.`);
           }
         } else {
-          // No items were deleted, treat as error
           const errorMessage = result.errors ? result.errors.join(', ') : result.error || response.statusText;
           throw new Error(`Delete failed: ${errorMessage}`);
         }
       } else {
-        // Complete success
         alert(`Successfully deleted "${item.Title}"`);
       }
 
-      // Remove the item from the local lists
       items = items.filter(libItem => libItem.Uuid !== item.Uuid);
       filteredItems = filteredItems.filter(libItem => libItem.Uuid !== item.Uuid);
 
-      // Close the detail view if the deleted item was selected
       if (selectedItem && selectedItem.Uuid === item.Uuid) {
         selectedItem = null;
       }
 
     } catch (error) {
-      console.error('Error deleting item:', error);
       alert(`Delete failed: ${error.message}`);
     }
   }
 
   onMount(() => {
-    console.log('Library component mounted. Loading initial items.');
     loadMoreItems();
-    isInitialLoad = false; // Set to false after initial load
+    isInitialLoad = false;
   });
 </script>
 
@@ -395,20 +343,7 @@
   <div class="gallery" on:scroll={handleScroll}>
     <div class="grid">
       {#each filteredItems as item (item.Uuid)}
-        <div class="grid-item" on:click={() => selectItem(item)}>
-          <div class="item-thumbnail">
-              <div class="placeholder">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                  <polyline points="14,2 14,8 20,8"></polyline>
-                </svg>
-              </div>
-          </div>
-          <div class="item-info">
-            <h3 class="item-title">{item.Title}</h3>
-            <p class="item-type">{item.FileType}</p>
-          </div>
-        </div>
+        <ItemCard {item} onSelect={selectItem} />
       {/each}
     </div>
 
@@ -490,7 +425,7 @@
           </div>
 
           <div class="card-actions">
-            <button class="action-button primary">Open</button>
+            <button class="action-button primary" on:click={() => openItem(selectedItem)}>Open</button>
             <button class="action-button" on:click={() => downloadItem(selectedItem)}>Download</button>
             <button class="action-button" on:click={() => deleteItem(selectedItem)}>Delete</button>
           </div>
@@ -618,63 +553,6 @@
     padding: 16px 0;
   }
 
-  .grid-item {
-    background: rgba(44, 44, 46, 0.8);
-    border-radius: 12px;
-    padding: 16px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-  }
-
-  .grid-item:hover {
-    background: rgba(44, 44, 46, 0.95);
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
-  }
-
-  .item-thumbnail {
-    width: 100%;
-    height: 120px;
-    border-radius: 8px;
-    overflow: hidden;
-    margin-bottom: 12px;
-    background: rgba(255, 255, 255, 0.05);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .item-thumbnail img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .placeholder {
-    color: rgba(255, 255, 255, 0.5);
-  }
-
-  .item-info {
-    text-align: center;
-  }
-
-  .item-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: #ffffff;
-    margin: 0 0 4px 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .item-type {
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.6);
-    margin: 0;
-  }
-
   .loading {
     display: flex;
     flex-direction: column;
@@ -796,14 +674,6 @@
     display: flex;
     align-items: flex-start;
     margin-bottom: 24px;
-  }
-
-  .card-thumbnail {
-    width: 80px;
-    height: 80px;
-    border-radius: 8px;
-    object-fit: cover;
-    margin-right: 16px;
   }
 
   .card-placeholder {

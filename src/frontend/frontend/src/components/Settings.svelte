@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+
+  const SETTINGS_KEY = 'scriptorium-settings';
+
   let darkMode = true;
   let autoSave = true;
   let notifications = true;
@@ -7,6 +11,7 @@
   let theme = 'dark';
   let fontSize = 'medium';
   let selectedFolder = '';
+  let initialized = false;
   
   const languages = [
     { code: 'en', name: 'English' },
@@ -27,11 +32,61 @@
     { value: 'medium', name: 'Medium' },
     { value: 'large', name: 'Large' }
   ];
-  
-  function selectFolder() {
-    // In a real app, this would open a folder picker
-    // For now, we'll simulate it
-    selectedFolder = '/Users/username/Documents/Scriptorium';
+
+  function loadSettings() {
+    try {
+      const saved = localStorage.getItem(SETTINGS_KEY);
+      if (saved) {
+        const settings = JSON.parse(saved);
+        darkMode = settings.darkMode ?? true;
+        autoSave = settings.autoSave ?? true;
+        notifications = settings.notifications ?? true;
+        syncEnabled = settings.syncEnabled ?? false;
+        language = settings.language ?? 'en';
+        theme = settings.theme ?? 'dark';
+        fontSize = settings.fontSize ?? 'medium';
+        selectedFolder = settings.selectedFolder ?? '';
+      }
+    } catch {
+      // use defaults on parse error
+    }
+  }
+
+  function saveSettings() {
+    if (!initialized) return;
+    const settings = {
+      darkMode,
+      autoSave,
+      notifications,
+      syncEnabled,
+      language,
+      theme,
+      fontSize,
+      selectedFolder
+    };
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  }
+
+  $: {
+    darkMode; autoSave; notifications; syncEnabled; language; theme; fontSize; selectedFolder;
+    if (initialized) {
+      saveSettings();
+    }
+  }
+
+  async function selectFolder() {
+    try {
+      const { SelectFolder } = await import('../wailsjs/go/main/App');
+      const folder = await SelectFolder();
+      if (folder) {
+        selectedFolder = folder;
+      }
+    } catch {
+      const folder = prompt('Enter folder path:', selectedFolder);
+      if (folder !== null) {
+        selectedFolder = folder;
+      }
+    }
   }
   
   function exportSettings() {
@@ -63,7 +118,6 @@
       reader.onload = (e) => {
         try {
           const settings = JSON.parse(e.target?.result as string);
-          // Apply settings
           darkMode = settings.darkMode ?? true;
           autoSave = settings.autoSave ?? true;
           notifications = settings.notifications ?? true;
@@ -72,13 +126,18 @@
           theme = settings.theme ?? 'dark';
           fontSize = settings.fontSize ?? 'medium';
           selectedFolder = settings.selectedFolder ?? '';
-        } catch (error) {
-          console.error('Error importing settings:', error);
+        } catch {
+          alert('Failed to import settings: invalid file format');
         }
       };
       reader.readAsText(file);
     }
   }
+
+  onMount(() => {
+    loadSettings();
+    initialized = true;
+  });
 </script>
 
 <div class="settings-container">
@@ -462,4 +521,4 @@
       margin-right: 0;
     }
   }
-</style> 
+</style>
