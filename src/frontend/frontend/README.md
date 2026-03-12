@@ -1,65 +1,69 @@
-# Svelte + TS + Vite
+# Scriptorium Svelte Frontend
 
-This template should help get you started developing with Svelte and TypeScript in Vite.
+The Svelte SPA that runs inside the Wails desktop shell (or standalone in a browser during development).
 
-## Recommended IDE Setup
+Built with **Svelte 3**, **TypeScript**, and **Vite 4**.
 
-[VS Code](https://code.visualstudio.com/)
+## Setup
 
-+ [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
-
-## Need an official Svelte framework?
-
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its
-serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less,
-and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
-
-## Technical considerations
-
-**Why use this over SvelteKit?**
-
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
-  `vite dev` and `vite build` wouldn't work in a SvelteKit environment, for example.
-
-This template contains as little as possible to get started with Vite + TypeScript + Svelte, while taking into account
-the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the
-other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte
-project.
-
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been
-structured similarly to SvelteKit so that it is easy to migrate.
-
-**Why `global.d.ts` instead of `compilerOptions.types` inside `jsconfig.json` or `tsconfig.json`?**
-
-Setting `compilerOptions.types` shuts out all other types not explicitly listed in the configuration. Using triple-slash
-references keeps the default TypeScript setting of accepting type information from the entire workspace, while also
-adding `svelte` and `vite/client` type information.
-
-**Why include `.vscode/extensions.json`?**
-
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to
-install the recommended extension upon opening the project.
-
-**Why enable `allowJs` in the TS template?**
-
-While `allowJs: false` would indeed prevent the use of `.js` files in the project, it does not prevent the use of
-JavaScript syntax in `.svelte` files. In addition, it would force `checkJs: false`, bringing the worst of both worlds:
-not being able to guarantee the entire codebase is TypeScript, and also having worse typechecking for the existing
-JavaScript. In addition, there are valid use cases in which a mixed codebase may be relevant.
-
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr`
-and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the
-details [here](https://github.com/rixo/svelte-hmr#svelte-hmr).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be
-replaced by HMR.
-
-```ts
-// store.ts
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
+```bash
+npm install
 ```
+
+## Development
+
+```bash
+npm run dev
+```
+
+Runs at `http://localhost:5173` with hot module replacement. Requires the Scriptorium backend to be running for API calls.
+
+When running inside Wails (`wails dev`), the dev server is managed automatically.
+
+## Build
+
+```bash
+npm run build
+```
+
+Output goes to `dist/`. Wails packages this automatically during `wails build`.
+
+## Components
+
+| File | Purpose |
+|---|---|
+| `App.svelte` | Root layout — sidebar, header, page routing |
+| `Library.svelte` | Document grid with infinite scroll, fuzzy search, detail card with open/convert/edit/download/delete actions |
+| `Add.svelte` | File upload form with drag-and-drop, image preview, document type dropdown, Dewey Decimal selector, metadata fields, validation |
+| `EditModal.svelte` | Modal overlay for editing an existing document's metadata — fetches available types and Dewey categories from the API |
+| `ItemCard.svelte` | Individual grid tile showing document title and file type |
+| `Settings.svelte` | User preferences (theme, font size, language, sync, folder) persisted to `localStorage` |
+| `Sidebar.svelte` | Navigation sidebar with links to Library, Add, and Settings |
+
+## Configuration
+
+`src/config.ts` exports `API_BASE_URL`, which defaults to `http://localhost:8080` and can be overridden with the `VITE_API_BASE_URL` environment variable.
+
+## Search
+
+The Library search bar supports fuzzy and prefix-based searching:
+
+- **No prefix** — fuzzy match across title, author, type, Dewey code, file type
+- `author:` — exact match on author
+- `type:` — exact match on document type
+- `dewey:` — exact match on Dewey Decimal code
+- `filetype:` — exact match on file extension
+
+## API Endpoints Used
+
+| Endpoint | Used by |
+|---|---|
+| `GET /data/search` | Library (browse + search) |
+| `GET /data/read/:uuid` | EditModal |
+| `PUT /data/update` | EditModal |
+| `DELETE /data/delete` | Library |
+| `GET /data/types` | Add, EditModal |
+| `GET /data/dewey` | Add, EditModal |
+| `POST /file/upload` | Add |
+| `GET /file/download/:uuid` | Library (open + download) |
+| `GET /file/convert/:uuid` | Library (View as PDF) |

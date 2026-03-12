@@ -1,224 +1,255 @@
 # Scriptorium
 
-Scriptorium intends to be a fairly flexible store of documents, using BoltDB to store information/metadata/location,
-and a basic software architecture to allow the management, record, and retrieval of said documents.
+A document management and library system with a Go backend and a Svelte/Wails desktop frontend. Scriptorium stores, indexes, searches, and converts documents of any supported format, using BoltDB for metadata and local filesystem storage for files.
 
-# build
-- ```go build .```
+## Architecture
 
-# dependencies
-- go 1.23+
-
-
-# Endpoints
-
-## `/data` Endpoints
-
-### ```/create``` **POST**
-- This endpoint is used for inserting a document into the database
-- **Request Body:**
-```JSON
-{
-    "DocType": "Notes",
-    "Title": "My Test Document",
-    "Content": "This is the content of my test document",
-    "MetaData": {
-        "Title": "My Test Document",
-        "Author": "John Doe",
-        "PublishDate": "2024-01-15",
-        "LastUpdated": "2024-01-15",
-        "FileType": "txt",
-        "DocType": "Notes",
-        "Path": "./documents"
-    }
-}
 ```
-- **Response:**
-```JSON
-{
-    "message": "Document inserted into DB",
-    "UUID": "7465e9fd-38db-4118-a6f1-d4ac0acce1e6"
-}
+src/
+├── backend/                  # Go REST + gRPC backend
+│   ├── main.go               # Entry point, wiring, graceful shutdown
+│   └── internal/backend/
+│       ├── config/            # Environment-based configuration
+│       ├── converter/         # Pandoc-based file conversion
+│       ├── dao/               # Data access (BoltDB), document models, Dewey data
+│       ├── fao/               # File access (local filesystem)
+│       └── service/           # HTTP handlers, gRPC file streaming, service layer
+│           └── pb/            # Protobuf definitions
+└── frontend/                 # Wails v2 desktop app
+    ├── app.go                # Wails backend (native dialogs)
+    └── frontend/             # Svelte SPA
+        └── src/
+            ├── App.svelte
+            ├── config.ts     # API base URL
+            └── components/
+                ├── Library.svelte    # Browse, search, open, convert, edit, delete
+                ├── Add.svelte        # Upload with metadata, Dewey classification
+                ├── EditModal.svelte  # Edit document metadata
+                ├── ItemCard.svelte   # Grid card for library items
+                ├── Settings.svelte   # Preferences (persisted to localStorage)
+                └── Sidebar.svelte    # Navigation
 ```
 
-### ```/read/:uuid``` **GET**
-- This endpoint is for retrieving singular documents by their UUID
-- **URL Parameter:** `:uuid` - The UUID of the document to retrieve
-- **Example:**
+### How it works
+
+- **REST API** (Gin) handles CRUD, search, and metadata operations on port `8080`.
+- **gRPC** streams file uploads and downloads on port `5001`.
+- **BoltDB** stores document metadata as JSON in a single `documents` bucket.
+- **Local FAO** persists files on disk under a configurable storage directory.
+- **Pandoc converter** converts between document formats (e.g. DOCX to PDF).
+- **Wails v2** wraps the Svelte frontend into a native desktop application.
+
+## Prerequisites
+
+- **Go** 1.23+
+- **Node.js** 18+ and npm
+- **Pandoc** (for file conversion) — `sudo apt install pandoc` or equivalent
+- **Wails CLI** v2 (for building the desktop app) — `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
+
+## Setup
+
+### 1. Clone and configure
+
 ```bash
-curl http://localhost:8080/data/read/7465e9fd-38db-4118-a6f1-d4ac0acce1e6
-```
-- **Response:**
-```JSON
-{
-    "message": "document retrieved",
-    "value": "{\"Title\":\"My Test Document\",\"Author\":\"John Doe\",\"PublishDate\":\"2024-01-15\",\"LastUpdated\":\"2024-01-15\",\"FileType\":\"txt\",\"DocType\":\"Notes\",\"Path\":\"./documents\",\"Uuid\":\"7465e9fd-38db-4118-a6f1-d4ac0acce1e6\"}"
-}
+git clone <repo-url> && cd scriptorium
+cp .env.example .env   # edit values as needed
 ```
 
-### ```/update``` **PUT**
-- This endpoint is for updating existing documents
-- **Request Body:**
-```JSON
-{
-    "Title": "Updated Document",
-    "Metadata": {
-        "Title": "Updated Title",
-        "Author": "Jane Doe",
-        "PublishDate": "2025-03-19",
-        "LastUpdated": "2025-03-19",
-        "FileType": "txt",
-        "Uuid": "550e8400-e29b-41d4-a716-446655440000"
-    },
-    "Content": "This is the updated content of the document."
-}
-```
-- **Response:**
-```JSON
-{
-    "message": "update successful",
-    "value": "550e8400-e29b-41d4-a716-446655440000"
-}
-```
+### 2. Run the backend
 
-### ```/delete``` **DELETE**
-- This endpoint is for deleting existing documents (supports bulk deletion)
-- **Request Body:**
-```JSON
-{
-    "uuids": [
-        "7465e9fd-38db-4118-a6f1-d4ac0acce1e6",
-        "12345678-1234-1234-1234-123456789abc"
-    ]
-}
-```
-- **Example:**
 ```bash
-curl -X DELETE http://localhost:8080/data/delete \
-  -H "Content-Type: application/json" \
-  -d '{"uuids": ["7465e9fd-38db-4118-a6f1-d4ac0acce1e6"]}'
-```
-- **Response (Success):**
-```JSON
-{
-    "deleted_count": 2,
-    "deleted_uuids": [
-        "7465e9fd-38db-4118-a6f1-d4ac0acce1e6",
-        "12345678-1234-1234-1234-123456789abc"
-    ]
-}
-```
-- **Response (Partial Success):**
-```JSON
-{
-    "deleted_count": 1,
-    "deleted_uuids": ["7465e9fd-38db-4118-a6f1-d4ac0acce1e6"],
-    "errors": ["Failed to delete UUID 'invalid-uuid': document not found"],
-    "error_count": 1
-}
+cd src/backend
+go build -o scriptorium .
+./scriptorium
 ```
 
-### ```/search``` **GET**
-- This endpoint is for searching documents with pagination support
-- **Query Parameters:**
-  - `key` (optional): Field to search in (e.g., "Title", "Author", "DocType")
-  - `value` (optional): Value to search for
-  - `page` (optional, default: 1): Page number (positive integer)
-  - `limit` (optional, default: 10): Results per page (1-100)
+The backend will start the REST API on `:8080` and gRPC on `:5001` by default.
 
-#### Search Examples:
+### 3. Run the frontend (development)
 
-**Get all documents (first page):**
 ```bash
+cd src/frontend
+wails dev
+```
+
+This launches the Svelte dev server with hot reload inside a native window.
+
+### 4. Build for production
+
+```bash
+cd src/frontend
+wails build
+```
+
+The compiled binary will be in `src/frontend/build/bin/`.
+
+## Configuration
+
+All configuration is via environment variables (or a `.env` file):
+
+| Variable | Default | Description |
+|---|---|---|
+| `DB_PATH` | `./scriptorium.db` | Path to BoltDB file |
+| `DB_MODE` | `0600` | File permissions for the database |
+| `STORAGE_PATH` | `./storage` | Directory for uploaded files |
+| `REST_PORT` | `8080` | REST API listen port |
+| `GRPC_PORT` | `5001` | gRPC listen port |
+| `VITE_API_BASE_URL` | `http://localhost:8080` | API URL used by the Svelte frontend |
+
+## API Reference
+
+### Data endpoints — `/data`
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/data/create` | Create a document record |
+| `GET` | `/data/read/:uuid` | Read a document by UUID |
+| `PUT` | `/data/update` | Update a document's metadata |
+| `DELETE` | `/data/delete` | Bulk delete by UUID list |
+| `GET` | `/data/search` | Search with pagination |
+| `GET` | `/data/types` | List registered document types |
+| `GET` | `/data/dewey` | List Dewey Decimal categories |
+
+#### Search parameters
+
+| Parameter | Description |
+|---|---|
+| `q` | Fuzzy search across all text fields (title, author, type, Dewey, etc.) |
+| `key` | Exact field name to match (e.g. `Title`, `Author`, `DocType`, `DeweyDecimal`) |
+| `value` | Value to match against the specified key |
+| `page` | Page number (default: 1) |
+| `limit` | Results per page, 1–100 (default: 10) |
+
+If `q` is provided it takes priority over `key`/`value`. If neither is provided, all documents are returned.
+
+**Examples:**
+
+```bash
+# Fuzzy search
+curl "http://localhost:8080/data/search?q=physics&page=1&limit=20"
+
+# Exact field search
+curl "http://localhost:8080/data/search?key=Author&value=John%20Doe"
+
+# All documents
 curl "http://localhost:8080/data/search"
 ```
 
-**Get all documents with pagination:**
-```bash
-curl "http://localhost:8080/data/search?page=2&limit=5"
-```
+#### Create / Update body
 
-**Search by author:**
-```bash
-curl "http://localhost:8080/data/search?key=Author&value=John%20Doe&page=1&limit=10"
-```
-
-**Search by document type:**
-```bash
-curl "http://localhost:8080/data/search?key=DocType&value=Notes&page=1&limit=20"
-```
-
-**Search by title:**
-```bash
-curl "http://localhost:8080/data/search?key=Title&value=My%20Document&page=1&limit=10"
-```
-
-- **Response:**
-```JSON
+```json
 {
-    "message": "Search completed",
-    "count": 5,
-    "total_count": 25,
-    "page": 1,
-    "limit": 10,
-    "total_pages": 3,
-    "has_next": true,
-    "has_prev": false,
-    "results": [
-        {
-            "Title": "My Test Document",
-            "Author": "John Doe",
-            "PublishDate": "2024-01-15",
-            "LastUpdated": "2024-01-15",
-            "FileType": "txt",
-            "DocType": "Notes",
-            "Path": "./documents",
-            "Uuid": "7465e9fd-38db-4118-a6f1-d4ac0acce1e6"
-        }
-    ]
+  "DocType": "Book",
+  "Title": "Introduction to Algorithms",
+  "Author": "Cormen et al.",
+  "PublishDate": "2009-07-31",
+  "DeweyDecimal": "510"
 }
 ```
 
-## `/file` Endpoints
+Update also requires `Uuid` in the body.
 
-### ```/upload``` **POST**
-- Upload files to the system
-- **Request:** Multipart form data with file field
-- **Example:**
+#### Delete body
+
+```json
+{
+  "uuids": ["uuid-1", "uuid-2"]
+}
+```
+
+### File endpoints — `/file`
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/file/upload` | Upload a file (multipart form, optional `metadata` JSON field) |
+| `GET` | `/file/download/:uuid` | Download a file by document UUID |
+| `GET` | `/file/convert/:uuid` | Convert a file and stream the result |
+
+#### Upload example
+
 ```bash
 curl -X POST http://localhost:8080/file/upload \
-  -F "file=@/path/to/your/file.txt"
+  -F "file=@document.docx" \
+  -F 'metadata={"DocType":"Book","Title":"My Book","Author":"Jane","DeweyDecimal":"800"}'
 ```
 
-### ```/download/:filename``` **GET**
-- Download files from the system
-- **URL Parameter:** `:filename` - The name of the file to download
-- **Example:**
+#### Convert example
+
 ```bash
-curl http://localhost:8080/file/download/myfile.txt
+# Convert to PDF (default)
+curl "http://localhost:8080/file/convert/<uuid>" -o output.pdf
+
+# Convert to HTML
+curl "http://localhost:8080/file/convert/<uuid>?format=html" -o output.html
 ```
 
-## Available Search Fields
+### Supported file types
 
-When using the search endpoint, you can search by any of these metadata fields:
-- `Title`
-- `Author`
-- `PublishDate`
-- `LastUpdated`
-- `FileType`
-- `DocType`
-- `Path`
-- `Uuid`
+Documents: PDF, DOCX, DOC, TXT, MD, RTF, ODT, EPUB
+Images: JPG, JPEG, PNG, GIF, SVG
+Audio: MP3, WAV, FLAC, AAC
+Video: MP4, AVI, MOV, MKV
 
-## URL Encoding
+Maximum upload size: **100 MB**
 
-When using search parameters with spaces or special characters, remember to URL encode them:
-- Space: `%20` or `+`
-- Special characters: Use proper URL encoding
+## Frontend search prefixes
 
-**Example:**
+In the Library search bar, you can use prefixes for targeted searches:
+
+| Prefix | Example | Behaviour |
+|---|---|---|
+| *(none)* | `algorithms` | Fuzzy match across all fields |
+| `author:` | `author:Knuth` | Exact match on Author field |
+| `type:` | `type:Book` | Exact match on DocType |
+| `dewey:` | `dewey:510` | Exact match on Dewey Decimal code |
+| `filetype:` | `filetype:.pdf` | Exact match on file extension |
+
+## Dewey Decimal Classification
+
+Documents can be categorised using Dewey Decimal codes. The system includes the 10 main classes and their second-level divisions (100 categories total):
+
+| Code | Class |
+|---|---|
+| 000 | Computer Science, Information & General Works |
+| 100 | Philosophy & Psychology |
+| 200 | Religion |
+| 300 | Social Sciences |
+| 400 | Language |
+| 500 | Science |
+| 600 | Technology |
+| 700 | Arts & Recreation |
+| 800 | Literature |
+| 900 | History & Geography |
+
+The full list of subdivisions is available via `GET /data/dewey`.
+
+## Document types
+
+Registered types: **Notes**, **Book**, **Article**, **Report**, **Manual**, **Reference**.
+
+Additional types can be registered in `main.go` by calling `docFactory.RegisterDocumentType(...)`.
+
+Available types can be queried at runtime via `GET /data/types`.
+
+## Testing
+
 ```bash
-# Search for "My Test Document" (space encoded as %20)
-curl "http://localhost:8080/data/search?key=Title&value=My%20Test%20Document"
+cd src/backend
+go test ./...
 ```
 
+Tests use temporary directories and isolated BoltDB instances — no external services required.
+
+## Project structure detail
+
+| Package | Responsibility |
+|---|---|
+| `dao` | Data Access Objects — BoltDB CRUD, document interfaces, MetaData struct, Dewey data, document factory |
+| `fao` | File Access Objects — local filesystem read/write/delete |
+| `converter` | Pandoc wrapper — format conversion by file path or document UUID |
+| `service` | HTTP/gRPC handlers, service wrappers around DAO/FAO |
+| `config` | Environment variable loading with defaults |
+
+## License
+
+See [LICENSE](LICENSE) if present.
