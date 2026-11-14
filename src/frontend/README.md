@@ -7,7 +7,7 @@ Wails v2 desktop application wrapping a Svelte SPA. Provides a native window wit
 - **Go** 1.23+
 - **Node.js** 18+ and npm
 - **Wails CLI** v2 — install with `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
-- The Scriptorium backend must be running (REST on `:8080`, gRPC on `:5001`) for data and file operations.
+- The Scriptorium REST backend must be running (default `127.0.0.1:8080`) for data and file operations. File transfers use the REST API and local storage; the old gRPC listener has been removed.
 
 ## Project Structure
 
@@ -46,14 +46,27 @@ npm install
 npm run dev
 ```
 
-This runs the Svelte app in the browser at `http://localhost:5173`. API calls go to the backend at the URL configured in `src/config.ts` (defaults to `http://localhost:8080`).
+This runs the Svelte app in the browser at `http://localhost:5173`. Set `VITE_API_BASE_URL` to the backend URL when the frontend and API use different origins, for example `VITE_API_BASE_URL=http://192.168.1.20:8080 npm run dev -- --host 0.0.0.0`.
 
 ## Building
+
+Build the desktop application:
 
 ```bash
 cd src/frontend
 wails build
 ```
+
+Build the browser client for hosting by the Go backend:
+
+```bash
+cd src/frontend/frontend
+npm run build
+mkdir -p ../../backend/web
+cp -a dist/. ../../backend/web/
+```
+
+Then run the backend from `src/backend`; it serves the SPA from `WEB_ROOT` (default `./web`) on the same origin as the API.
 
 The compiled binary is output to `build/bin/`. Platform-specific assets (icons, manifests, plist files) live in the `build/` subdirectories and can be customised.
 
