@@ -1,8 +1,10 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"scriptorium/internal/backend/config"
@@ -11,9 +13,7 @@ import (
 	"scriptorium/internal/backend/fao"
 	"scriptorium/internal/backend/service"
 	"syscall"
-
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"time"
 )
 
 func main() {
@@ -33,8 +33,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("error instantiating DB: %s", err.Error())
 	}
+	defer func() {
+		if err := d.Disconnect(); err != nil {
+			log.Printf("error closing database: %v", err)
+		}
+	}()
 
 	docFactory := dao.NewDocumentFactory()
+	docFactory.RegisterDocumentType("File", func() dao.Document { return &dao.Notes{} })
 	docFactory.RegisterDocumentType("Notes", func() dao.Document { return &dao.Notes{} })
 	docFactory.RegisterDocumentType("Book", func() dao.Document { return &dao.Notes{} })
 	docFactory.RegisterDocumentType("Article", func() dao.Document { return &dao.Notes{} })
@@ -57,7 +63,7 @@ func main() {
 	//---------------------------------------------------
 
 	// Create storage directory if it doesn't exist
-	if err := os.MkdirAll(cfg.Storage.Path, 0755); err != nil {
+	if err := os.MkdirAll(cfg.Storage.Path, 0700); err != nil {
 		log.Fatalf("failed to create storage directory: %v", err)
 	}
 
@@ -68,35 +74,23 @@ func main() {
 
 	apiHandler := service.NewAPIHandler(daos, docFactory, f)
 
-	fileHandlerService := service.FileHandlerService{}
-	fhServ, err := fileHandlerService.New(f)
-	if err != nil {
-		log.Fatalf("error instantiating FileHandlerService: %s", err.Error())
-	}
-
-	faos, ok := fhServ.(service.FileHandlerService)
-	if !ok {
-		log.Fatalf("error type checking FileHandlerService")
-	}
-
-	grpcServer := grpc.NewServer()
-	grpcErrCh := service.StartGrcpService(grpcServer, faos, cfg.Server.GrpcPort)
-
-	grpcAddr := fmt.Sprintf("localhost:%d", cfg.Server.GrpcPort)
-	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
-	}
-	defer conn.Close()
-
-	fileHandler := service.NewFileHandler(faos, conn, apiHandler, pandocConverter)
+	fileHandler := service.NewFileHandler(f, apiHandler, pandocConverter)
 
 	//---------------------------------------------------
 	//-------------------SERVICE-START-------------------
 	//---------------------------------------------------
 
-	// Call StartRestAPI with handlers
-	errCh := service.StartRestAPI(cfg.Server.RestPort, apiHandler, fileHandler)
+	server, err := service.NewHTTPServer(cfg.Server.RestHost, cfg.Server.RestPort, cfg.Server.WebRoot, apiHandler, fileHandler)
+	if err != nil {
+		log.Fatalf("failed to configure HTTP server: %v", err)
+	}
+	errCh := make(chan error, 1)
+	log.Printf("Scriptorium API listening on %s", server.Addr)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
 
 	// Set up graceful shutdown
 	signalCh := make(chan os.Signal, 1)
@@ -104,18 +98,16 @@ func main() {
 
 	select {
 	case err := <-errCh:
-		if err != nil {
-			log.Fatalf("REST API Error: %v", err)
-		}
-	case err := <-grpcErrCh:
-		if err != nil {
-			log.Fatalf("gRPC Error: %v", err)
-		}
+		log.Printf("HTTP server failed: %v", err)
 	case sig := <-signalCh:
 		log.Printf("Received shutdown signal: %s", sig)
-		grpcServer.GracefulStop()
-		if err := d.Disconnect(); err != nil {
-			log.Printf("Error closing database: %v", err)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("graceful HTTP shutdown failed: %v", err)
+			if closeErr := server.Close(); closeErr != nil {
+				log.Printf("HTTP close failed: %v", closeErr)
+			}
 		}
 		log.Println("Shutdown complete")
 	}
