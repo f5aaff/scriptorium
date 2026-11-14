@@ -7,7 +7,8 @@ Wails v2 desktop application wrapping a Svelte SPA. Provides a native window wit
 - **Go** 1.23+
 - **Node.js** 18+ and npm
 - **Wails CLI** v2 — install with `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
-- The Scriptorium backend must be running (REST on `:8080`, gRPC on `:5001`) for data and file operations.
+- The Scriptorium REST backend must be running (default `127.0.0.1:8080`) for data and file operations. File transfers use the REST API and local storage; the old gRPC listener has been removed.
+- Sign-in is required. The browser client uses HttpOnly cookies and CSRF protection; the Wails client uses an in-memory bearer session. For cross-origin desktop or development clients, configure the exact frontend origin in `CORS_ALLOWED_ORIGINS` on the backend.
 
 ## Project Structure
 
@@ -46,14 +47,27 @@ npm install
 npm run dev
 ```
 
-This runs the Svelte app in the browser at `http://localhost:5173`. API calls go to the backend at the URL configured in `src/config.ts` (defaults to `http://localhost:8080`).
+This runs the Svelte app in the browser at `http://localhost:5173`. Set `VITE_API_BASE_URL` to the backend URL and add the exact Vite origin to `CORS_ALLOWED_ORIGINS` on the backend. For local HTTP development, set `COOKIE_SECURE=false` and `ALLOW_INSECURE_COOKIES=true` together. Do not use those settings outside local development.
 
 ## Building
+
+Build the desktop application:
 
 ```bash
 cd src/frontend
 wails build
 ```
+
+Build the browser client for hosting by the Go backend:
+
+```bash
+cd src/frontend/frontend
+npm run build
+mkdir -p ../../backend/web
+cp -a dist/. ../../backend/web/
+```
+
+Then run the backend from `src/backend`; it serves the SPA from `WEB_ROOT` (default `./web`) on the same origin as the API.
 
 The compiled binary is output to `build/bin/`. Platform-specific assets (icons, manifests, plist files) live in the `build/` subdirectories and can be customised.
 
@@ -61,7 +75,7 @@ The compiled binary is output to `build/bin/`. Platform-specific assets (icons, 
 
 | Variable | Default | Description |
 |---|---|---|
-| `VITE_API_BASE_URL` | `http://localhost:8080` | Backend API URL used by the Svelte frontend |
+| `VITE_API_BASE_URL` | Same-origin in browser; `http://localhost:8080` in Wails | Backend API URL used by the Svelte frontend |
 
 Set this in a `.env` file in the `frontend/` directory or as an environment variable before building.
 
@@ -82,5 +96,5 @@ These are auto-generated into `frontend/src/wailsjs/` by Wails and can be import
 | **Library** | Browse, search (fuzzy + prefix filters), open, convert to PDF, edit metadata, download, delete |
 | **Add** | Upload files with metadata — document type dropdown, Dewey Decimal selector, image preview, validation |
 | **EditModal** | Modal for editing document metadata (title, author, type, Dewey, publish date) |
-| **Settings** | Preferences persisted to localStorage — theme, font size, language, sync, folder selection |
+| **Settings** | Preferences persisted to localStorage, plus owner password change |
 | **Sidebar** | Navigation between views |

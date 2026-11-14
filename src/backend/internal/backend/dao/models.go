@@ -198,12 +198,12 @@ func (b *BoltDao) Delete(id uuid.UUID) error {
 }
 
 func (b *BoltDao) SearchByKeyValue(key, value string) ([]MetaData, error) {
-	var results []MetaData
+	results := make([]MetaData, 0)
 
 	err := b.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("documents"))
 		if bucket == nil {
-			return fmt.Errorf("documents bucket does not exist")
+			return nil
 		}
 
 		c := bucket.Cursor()
@@ -228,12 +228,12 @@ func (b *BoltDao) SearchByKeyValue(key, value string) ([]MetaData, error) {
 }
 
 func (b *BoltDao) GetAll() ([]MetaData, error) {
-	var results []MetaData
+	results := make([]MetaData, 0)
 
 	err := b.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("documents"))
 		if bucket == nil {
-			return fmt.Errorf("documents bucket does not exist")
+			return nil
 		}
 
 		c := bucket.Cursor()
@@ -255,13 +255,13 @@ func (b *BoltDao) GetAll() ([]MetaData, error) {
 }
 
 func (b *BoltDao) FuzzySearch(query string) ([]MetaData, error) {
-	var results []MetaData
+	results := make([]MetaData, 0)
 	query = strings.ToLower(query)
 
 	err := b.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("documents"))
 		if bucket == nil {
-			return fmt.Errorf("documents bucket does not exist")
+			return nil
 		}
 
 		c := bucket.Cursor()
@@ -291,10 +291,27 @@ func fuzzyMatchMetaData(meta MetaData, query string) bool {
 		meta.DocType,
 		meta.FileType,
 		meta.DeweyDecimal,
+		meta.SuggestedDeweyDecimal,
+		meta.SuggestedDeweyName,
 		meta.PublishDate,
+		meta.OriginalFilename,
+		meta.MediaType,
+		meta.MediaKind,
+		meta.ClassificationStatus,
+		meta.ExtractionStatus,
 	}
 	for _, field := range fields {
 		if field != "" && strings.Contains(strings.ToLower(field), query) {
+			return true
+		}
+	}
+	for _, subject := range meta.Subjects {
+		if strings.Contains(strings.ToLower(subject), query) {
+			return true
+		}
+	}
+	for key, value := range meta.ExtraMetadata {
+		if strings.Contains(strings.ToLower(key), query) || strings.Contains(strings.ToLower(value), query) {
 			return true
 		}
 	}
@@ -307,7 +324,7 @@ func metaDataMatches(metaData MetaData, key, value string) bool {
 	if err != nil {
 		return false // Field not found or invalid
 	}
-	return metaValue == value
+	return strings.EqualFold(metaValue, value)
 }
 
 // Reflection-based function to retrieve a field value by name
@@ -343,15 +360,29 @@ func getStructFieldValue(metaData MetaData, fieldName string) (string, error) {
 // basic struct, contains generic information
 // regarding the document it references.
 type MetaData struct {
-	Title        string
-	Author       string
-	PublishDate  string
-	LastUpdated  string
-	FileType     string
-	DocType      string
-	DeweyDecimal string
-	Path         string
-	Uuid         string
+	Title                    string
+	Author                   string
+	PublishDate              string
+	LastUpdated              string
+	FileType                 string
+	DocType                  string
+	DeweyDecimal             string
+	Path                     string
+	Uuid                     string
+	OriginalFilename         string
+	MediaType                string
+	MediaKind                string
+	Size                     int64
+	SHA256                   string
+	Subjects                 []string
+	ExtraMetadata            map[string]string
+	ClassificationStatus     string
+	ExtractionStatus         string
+	ClassificationConfidence float64
+	ClassificationEvidence   []string
+	SuggestedDeweyDecimal    string
+	SuggestedDeweyName       string
+	ExtractedText            string `json:"-"` // Stored separately and indexed by SQLite; never returned in catalogue listings.
 }
 
 //---------------------------------------------------

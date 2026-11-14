@@ -1,19 +1,22 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"scriptorium/internal/backend/auth"
 	"scriptorium/internal/backend/config"
 	"scriptorium/internal/backend/converter"
 	"scriptorium/internal/backend/dao"
 	"scriptorium/internal/backend/fao"
+	"scriptorium/internal/backend/ingest"
 	"scriptorium/internal/backend/service"
 	"syscall"
-
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"time"
 )
 
 func main() {
@@ -27,14 +30,27 @@ func main() {
 	//----------------API-HANDLER-SET-UP-----------------
 	//---------------------------------------------------
 
-	var conparams dao.BoltConnectionParams = dao.BoltConnectionParams{Path: cfg.Database.Path, Mode: os.FileMode(cfg.Database.Mode), Opts: nil}
-	var d dao.DAO = &dao.BoltDao{}
+	migrated, err := dao.MigrateBoltToSQLite(cfg.Database.Path, os.FileMode(cfg.Database.Mode))
+	if err != nil {
+		log.Fatalf("error migrating legacy catalogue: %v", err)
+	}
+	if migrated {
+		log.Printf("migrated legacy BoltDB catalogue to SQLite; backup retained at %s.bolt.bak", cfg.Database.Path)
+	}
+	var conparams = dao.SQLiteConnectionParams{Path: cfg.Database.Path, Mode: os.FileMode(cfg.Database.Mode)}
+	var d dao.DAO = &dao.SQLiteDAO{}
 	err = d.Connect(&conparams)
 	if err != nil {
 		log.Fatalf("error instantiating DB: %s", err.Error())
 	}
+	defer func() {
+		if err := d.Disconnect(); err != nil {
+			log.Printf("error closing database: %v", err)
+		}
+	}()
 
 	docFactory := dao.NewDocumentFactory()
+	docFactory.RegisterDocumentType("File", func() dao.Document { return &dao.Notes{} })
 	docFactory.RegisterDocumentType("Notes", func() dao.Document { return &dao.Notes{} })
 	docFactory.RegisterDocumentType("Book", func() dao.Document { return &dao.Notes{} })
 	docFactory.RegisterDocumentType("Article", func() dao.Document { return &dao.Notes{} })
@@ -57,7 +73,7 @@ func main() {
 	//---------------------------------------------------
 
 	// Create storage directory if it doesn't exist
-	if err := os.MkdirAll(cfg.Storage.Path, 0755); err != nil {
+	if err := os.MkdirAll(cfg.Storage.Path, 0700); err != nil {
 		log.Fatalf("failed to create storage directory: %v", err)
 	}
 
@@ -68,35 +84,45 @@ func main() {
 
 	apiHandler := service.NewAPIHandler(daos, docFactory, f)
 
-	fileHandlerService := service.FileHandlerService{}
-	fhServ, err := fileHandlerService.New(f)
-	if err != nil {
-		log.Fatalf("error instantiating FileHandlerService: %s", err.Error())
-	}
-
-	faos, ok := fhServ.(service.FileHandlerService)
+	fileHandler := service.NewFileHandler(f, apiHandler, pandocConverter)
+	jobRepository, ok := d.(ingest.JobRepository)
 	if !ok {
-		log.Fatalf("error type checking FileHandlerService")
+		log.Fatalf("configured database does not support durable ingestion jobs")
 	}
-
-	grpcServer := grpc.NewServer()
-	grpcErrCh := service.StartGrcpService(grpcServer, faos, cfg.Server.GrpcPort)
-
-	grpcAddr := fmt.Sprintf("localhost:%d", cfg.Server.GrpcPort)
-	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	jobManager, err := ingest.NewJobManager(jobRepository, fileHandler.Ingestor, filepath.Join(cfg.Storage.Path, ".jobs"), cfg.Import.Roots, ingest.DefaultJobWorkers)
 	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
+		log.Fatalf("failed to initialise ingestion jobs: %v", err)
 	}
-	defer conn.Close()
-
-	fileHandler := service.NewFileHandler(faos, conn, apiHandler, pandocConverter)
+	jobManager.Start(context.Background())
+	fileHandler.ConfigureJobs(jobManager)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := jobManager.Stop(ctx); err != nil {
+			log.Printf("ingestion worker shutdown: %v", err)
+		}
+	}()
 
 	//---------------------------------------------------
 	//-------------------SERVICE-START-------------------
 	//---------------------------------------------------
 
-	// Call StartRestAPI with handlers
-	errCh := service.StartRestAPI(cfg.Server.RestPort, apiHandler, fileHandler)
+	authManager, err := auth.NewManager(cfg.Auth.File, cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.CookieSecure)
+	if err != nil {
+		log.Fatalf("failed to initialise authentication: %v", err)
+	}
+
+	server, err := service.NewHTTPServer(cfg.Server.RestHost, cfg.Server.RestPort, cfg.Server.WebRoot, authManager, cfg.Server.AllowedOrigins, cfg.Server.TrustedProxies, apiHandler, fileHandler)
+	if err != nil {
+		log.Fatalf("failed to configure HTTP server: %v", err)
+	}
+	errCh := make(chan error, 1)
+	log.Printf("Scriptorium API listening on %s", server.Addr)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
 
 	// Set up graceful shutdown
 	signalCh := make(chan os.Signal, 1)
@@ -104,18 +130,16 @@ func main() {
 
 	select {
 	case err := <-errCh:
-		if err != nil {
-			log.Fatalf("REST API Error: %v", err)
-		}
-	case err := <-grpcErrCh:
-		if err != nil {
-			log.Fatalf("gRPC Error: %v", err)
-		}
+		log.Printf("HTTP server failed: %v", err)
 	case sig := <-signalCh:
 		log.Printf("Received shutdown signal: %s", sig)
-		grpcServer.GracefulStop()
-		if err := d.Disconnect(); err != nil {
-			log.Printf("Error closing database: %v", err)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("graceful HTTP shutdown failed: %v", err)
+			if closeErr := server.Close(); closeErr != nil {
+				log.Printf("HTTP close failed: %v", closeErr)
+			}
 		}
 		log.Println("Shutdown complete")
 	}

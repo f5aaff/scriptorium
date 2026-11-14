@@ -1,40 +1,34 @@
 package service
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"path/filepath"
+	"scriptorium/internal/backend/auth"
 	"scriptorium/internal/backend/converter"
 	"scriptorium/internal/backend/dao"
 	"scriptorium/internal/backend/fao"
-	"scriptorium/internal/backend/service/pb"
+	"scriptorium/internal/backend/formats"
+	"scriptorium/internal/backend/ingest"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"google.golang.org/grpc"
 )
 
-const maxFileSize = 100 * 1024 * 1024 // 100MB
-
-var allowedFileTypes = map[string]bool{
-	".pdf": true, ".docx": true, ".doc": true, ".txt": true, ".md": true,
-	".rtf": true, ".odt": true, ".epub": true,
-	".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".svg": true,
-	".mp3": true, ".wav": true, ".flac": true, ".aac": true,
-	".mp4": true, ".avi": true, ".mov": true, ".mkv": true,
-}
-
-func isAllowedFileType(ext string) bool {
-	return allowedFileTypes[strings.ToLower(ext)]
-}
+const maxFileSize = 100 * 1024 * 1024 // 100 MiB
 
 //---------------------------------------------------
 //---------------------HANDLER-----------------------
@@ -50,258 +44,232 @@ type Handler interface {
 //---------------------------------------------------
 
 type FileHandler struct {
-	FaoService        FileHandlerService
-	FileServiceClient pb.FileServiceClient
-	APIHandler        *APIHandler
-	Converter         converter.Converter
+	FaoService fao.FAO
+	APIHandler *APIHandler
+	Converter  converter.Converter
+	Ingestor   *ingest.Service
+	Jobs       *ingest.JobManager
 }
 
 func (f *FileHandler) GetService() any {
 	return f.FaoService
 }
 
-func NewFileHandler(faos FileHandlerService, conn *grpc.ClientConn, apiHandler *APIHandler, conv converter.Converter) *FileHandler {
-	return &FileHandler{
-		FaoService:        faos,
-		FileServiceClient: pb.NewFileServiceClient(conn),
-		APIHandler:        apiHandler,
-		Converter:         conv,
-	}
+func NewFileHandler(storage fao.FAO, apiHandler *APIHandler, conv converter.Converter) *FileHandler {
+	ingestor, _ := ingest.New(&apiHandler.DaoService, storage, formats.NewDefaultAdapterRegistry(), maxFileSize)
+	return &FileHandler{FaoService: storage, APIHandler: apiHandler, Converter: conv, Ingestor: ingestor}
 }
 
-// UploadFile handles file uploads with optional metadata for database record creation.
-//
-// Expected form data:
-//   - "file": The file to upload
-//   - "metadata" (optional): JSON string containing document metadata
-//     Example metadata:
-//     {
-//     "DocType": "Notes",
-//     "Title": "My Document",
-//     "Author": "John Doe",
-//     "PublishDate": "2024-01-01"
-//     }
-//
-// The function will:
-// 1. Generate a unique filename for the uploaded file
-// 2. Save the file to the server's storage location
-// 3. If metadata is provided, create a database record with the file path
-// 4. Return the generated file path and document UUID
+// UploadFile preserves and catalogues every uploaded file, including unknown formats.
 func (f FileHandler) UploadFile(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxFileSize)
-
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
-		if err.Error() == "http: request body too large" {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "File size exceeds maximum limit of 100MB"})
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file exceeds the 100 MiB upload limit"})
 			return
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid file Upload", "output": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file upload", "details": err.Error()})
 		return
 	}
-
 	defer file.Close()
 
-	fileExt := strings.ToLower(filepath.Ext(header.Filename))
-	if !isAllowedFileType(fileExt) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": fmt.Sprintf("File type '%s' is not supported. Supported types: PDF, DOCX, DOC, TXT, MD, RTF, ODT, EPUB, JPG, JPEG, PNG, GIF, SVG, MP3, WAV, FLAC, AAC, MP4, AVI, MOV, MKV", fileExt),
-		})
-		return
-	}
-
-	// Parse metadata from form data
-	var metadata map[string]any
-	if metadataStr := c.PostForm("metadata"); metadataStr != "" {
-		if err := json.Unmarshal([]byte(metadataStr), &metadata); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid metadata format", "output": err.Error()})
+	var supplied map[string]any
+	if raw := c.PostForm("metadata"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &supplied); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid metadata JSON", "details": err.Error()})
 			return
 		}
 	}
-
-	// Generate unique filename to avoid conflicts
-	uniqueFilename := uuid.New().String() + fileExt
-	filePath := uniqueFilename
-
-	stream, err := f.FileServiceClient.UploadFile(context.Background())
+	result, err := f.Ingestor.Import(c.Request.Context(), ingest.Request{Filename: header.Filename, Metadata: supplied}, file)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload stream", "output": err.Error()})
+		if errors.Is(err, ingest.ErrTooLarge) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file exceeds the 100 MiB upload limit"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file import failed", "details": err.Error()})
 		return
 	}
-
-	buf := make([]byte, 4096)
-	firstChunk := true
-	for {
-		n, err := file.Read(buf)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error reading file", "output": err.Error()})
-			return
-		}
-
-		chunk := &pb.FileChunk{Data: buf[:n]}
-		if firstChunk {
-			chunk.Filename = filePath // Use the generated path instead of original filename
-			firstChunk = false
-		}
-
-		if err := stream.Send(chunk); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send file chunk", "output": err.Error()})
-			return
-		}
+	status := http.StatusCreated
+	message := "file imported and catalogued"
+	if result.Duplicate {
+		status = http.StatusOK
+		message = "identical file already exists in the library"
 	}
-	// Close the stream and get the response
-	resp, err := stream.CloseAndRecv()
+	c.JSON(status, gin.H{
+		"message":           message,
+		"document_uuid":     result.Metadata.Uuid,
+		"original_filename": result.Metadata.OriginalFilename,
+		"media_type":        result.Metadata.MediaType,
+		"kind":              result.Kind,
+		"sha256":            result.Metadata.SHA256,
+		"duplicate":         result.Duplicate,
+		"metadata":          result.Metadata,
+	})
+}
+
+// ConfigureJobs attaches the durable ingestion queue after the database and
+// configured import roots have been initialised.
+func (f *FileHandler) ConfigureJobs(jobs *ingest.JobManager) { f.Jobs = jobs }
+
+func (f FileHandler) UploadBatch(c *gin.Context) {
+	if f.Jobs == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "background ingestion is unavailable"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, ingest.MaxBatchBytes+(16<<20))
+	form, err := c.MultipartForm()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Upload failed"})
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "batch exceeds the 1 GiB request limit"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid multipart batch", "details": err.Error()})
 		return
 	}
-
-	// Create database record with the file path
-	if len(metadata) > 0 {
-		// Add the file path to metadata
-		metadata["Path"] = filePath
-		metadata["FileType"] = fileExt
-
-		// Create document record
-		docType, ok := metadata["DocType"].(string)
-		if !ok || docType == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Missing or invalid document type in metadata"})
-			return
-		}
-
-		// Use the API handler's document factory to create the document
-		doc, err := f.APIHandler.DocumentFactory.NewDocument(docType)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Unknown document type"})
-			return
-		}
-
-		// Set metadata
-		meta := doc.GetMetaData()
-		meta.Uuid = uuid.New().String()
-		meta.DocType = docType
-		meta.Path = filePath
-		meta.FileType = fileExt
-		if title, ok := metadata["Title"].(string); ok {
-			meta.Title = title
-		}
-		if author, ok := metadata["Author"].(string); ok {
-			meta.Author = author
-		}
-		if publishDate, ok := metadata["PublishDate"].(string); ok {
-			meta.PublishDate = publishDate
-		}
-		if dewey, ok := metadata["DeweyDecimal"].(string); ok {
-			meta.DeweyDecimal = dewey
-		}
-
-		err = doc.SetMetaData(meta)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to set metadata"})
-			return
-		}
-
-		// Set other document fields
-		docJSON, _ := json.Marshal(metadata)
-		if err := json.Unmarshal(docJSON, &doc); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode document"})
-			return
-		}
-
-		// Save to database
-		err = f.APIHandler.DaoService.Create(doc)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create database record", "output": err.Error()})
-			return
-		}
-
-		// Respond with success message and document info
-		c.JSON(http.StatusOK, gin.H{
-			"message":           resp.Message,
-			"file_path":         filePath,
-			"document_uuid":     doc.GetID(),
-			"original_filename": header.Filename,
-		})
-	} else {
-		// Just file upload without database record
-		c.JSON(http.StatusOK, gin.H{
-			"message":           resp.Message,
-			"file_path":         filePath,
-			"original_filename": header.Filename,
-		})
+	defer form.RemoveAll()
+	files := form.File["files"]
+	if len(files) == 0 {
+		files = form.File["file"]
 	}
+	if len(files) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "provide one or more files in the files field"})
+		return
+	}
+	uploads := make([]ingest.Upload, 0, len(files))
+	opened := make([]multipart.File, 0, len(files))
+	defer func() {
+		for _, file := range opened {
+			_ = file.Close()
+		}
+	}()
+	for _, header := range files {
+		file, err := header.Open()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cannot read uploaded file"})
+			return
+		}
+		opened = append(opened, file)
+		uploads = append(uploads, ingest.Upload{Filename: header.Filename, Reader: file})
+	}
+	job, err := f.Jobs.EnqueueUploads(c.Request.Context(), uploads)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ingest.ErrTooLarge) || errors.Is(err, ingest.ErrBatchTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		if errors.Is(err, dao.ErrJobQueueFull) {
+			status = http.StatusTooManyRequests
+		}
+		c.JSON(status, gin.H{"error": "cannot queue batch import", "details": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"job": job})
+}
+
+func (f FileHandler) ImportDirectory(c *gin.Context) {
+	if f.Jobs == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "background ingestion is unavailable"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	var request struct {
+		RootID string `json:"root_id"`
+		Path   string `json:"path"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid directory import request"})
+		return
+	}
+	job, err := f.Jobs.EnqueueDirectory(c.Request.Context(), request.RootID, request.Path)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ingest.ErrTooLarge) || errors.Is(err, ingest.ErrBatchTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		if errors.Is(err, dao.ErrJobQueueFull) {
+			status = http.StatusTooManyRequests
+		}
+		c.JSON(status, gin.H{"error": "cannot queue directory import", "details": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"job": job})
+}
+func (f FileHandler) ListImportRoots(c *gin.Context) {
+	if f.Jobs == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "background ingestion is unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"roots": f.Jobs.Roots()})
+}
+func (f FileHandler) ListImportJobs(c *gin.Context) {
+	if f.Jobs == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "background ingestion is unavailable"})
+		return
+	}
+	jobs, err := f.Jobs.List(25)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot list import jobs"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
+}
+func (f FileHandler) GetImportJob(c *gin.Context) {
+	if f.Jobs == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "background ingestion is unavailable"})
+		return
+	}
+	job, err := f.Jobs.Get(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "import job not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"job": job})
 }
 
 func (f FileHandler) DownloadFile(c *gin.Context) {
-	uuidStr := c.Param("uuid")
-	if uuidStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing UUID parameter"})
-		return
-	}
-
-	// Parse UUID
-	uuid, err := uuid.Parse(uuidStr)
+	id, err := uuid.Parse(c.Param("uuid"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid UUID format"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid UUID"})
 		return
 	}
-
-	// Get document metadata from database
-	rawData, err := f.APIHandler.DaoService.ReadRaw(uuid)
+	raw, err := f.APIHandler.DaoService.ReadRaw(id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "document not found"})
 		return
 	}
-
-	// Parse metadata to get file path
 	var metadata dao.MetaData
-	if err := json.Unmarshal(rawData, &metadata); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse document metadata"})
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid document metadata"})
 		return
 	}
-
-	if metadata.Path == "" {
-		c.JSON(http.StatusNotFound, gin.H{"error": "File path not found in document metadata"})
-		return
-	}
-
-	// Call gRPC DownloadFile method with the file path from database
-	stream, err := f.FileServiceClient.DownloadFile(context.Background(), &pb.FileRequest{Filename: metadata.Path})
+	file, err := f.FaoService.GetFile(metadata.Path)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to download file"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "stored file not found"})
 		return
 	}
-
-	// Set response headers with original filename if available
-	downloadFilename := metadata.Title
-	if downloadFilename == "" {
-		downloadFilename = metadata.Path // fallback to UUID filename
+	defer file.Close()
+	filename := metadata.OriginalFilename
+	if filename == "" {
+		filename = metadata.Title
 	}
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", downloadFilename))
-	c.Header("Content-Type", "application/octet-stream")
-
-	// Stream file chunks
-	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error receiving file chunk", "output": err.Error()})
-			return
-		}
-
-		// Write chunk to HTTP response
-		_, err = c.Writer.Write(chunk.Data)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to write file chunk", "output": err.Error()})
-			return
-		}
+	if filename == "" {
+		filename = id.String()
+	}
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", url.PathEscape(filename)))
+	contentType := metadata.MediaType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	c.Header("Content-Type", contentType)
+	c.Status(http.StatusOK)
+	if _, err := io.Copy(c.Writer, file); err != nil {
+		log.Printf("download stream failed for %s: %v", id, err)
 	}
 }
+
 func (f FileHandler) ConvertFile(c *gin.Context) {
 	uuidStr := c.Param("uuid")
 	if uuidStr == "" {
@@ -364,7 +332,11 @@ func (f FileHandler) ConvertFile(c *gin.Context) {
 	downloadName += "." + format
 
 	c.Header("Content-Type", contentType)
-	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=%s", downloadName))
+	disposition := mime.FormatMediaType("inline", map[string]string{"filename": downloadName})
+	if disposition == "" {
+		disposition = "inline"
+	}
+	c.Header("Content-Disposition", disposition)
 	io.Copy(c.Writer, file)
 }
 
@@ -372,9 +344,14 @@ func (f *FileHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 	groupName := "/file"
 
 	routes := map[string]gin.HandlerFunc{
-		"POST /upload":        f.UploadFile,
-		"GET /download/:uuid": f.DownloadFile,
-		"GET /convert/:uuid":  f.ConvertFile,
+		"POST /upload":            f.UploadFile,
+		"POST /imports/upload":    f.UploadBatch,
+		"POST /imports/directory": f.ImportDirectory,
+		"GET /imports/roots":      f.ListImportRoots,
+		"GET /imports/jobs":       f.ListImportJobs,
+		"GET /imports/jobs/:id":   f.GetImportJob,
+		"GET /download/:uuid":     f.DownloadFile,
+		"POST /convert/:uuid":     f.ConvertFile,
 	}
 
 	return groupName, routes
@@ -547,70 +524,72 @@ func (h *APIHandler) Read(c *gin.Context) {
 }
 
 func (h *APIHandler) Update(c *gin.Context) {
-	var reqData map[string]any
-
-	if err := c.ShouldBindJSON(&reqData); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	var request struct {
+		UUID        string  `json:"Uuid"`
+		DocType     string  `json:"DocType"`
+		Title       *string `json:"Title"`
+		Author      *string `json:"Author"`
+		PublishDate *string `json:"PublishDate"`
+		Dewey       *string `json:"DeweyDecimal"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid update request", "details": err.Error()})
 		return
 	}
-
-	docType, ok := reqData["DocType"].(string)
-	if !ok || docType == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing or invalid document type"})
-		return
-	}
-
-	uuidStr, ok := reqData["Uuid"].(string)
-	if !ok || uuidStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing or invalid UUID"})
-		return
-	}
-
-	doc, err := h.DocumentFactory.NewDocument(docType)
+	id, err := uuid.Parse(request.UUID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Unknown document type"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing or invalid UUID"})
 		return
 	}
-
-	docJSON, _ := json.Marshal(reqData)
-	if err := json.Unmarshal(docJSON, &doc); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to decode document"})
+	if request.DocType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "document type is required"})
 		return
 	}
-
-	meta := doc.GetMetaData()
-	meta.Uuid = uuidStr
-	meta.DocType = docType
-	if title, ok := reqData["Title"].(string); ok {
-		meta.Title = title
-	}
-	if author, ok := reqData["Author"].(string); ok {
-		meta.Author = author
-	}
-	if publishDate, ok := reqData["PublishDate"].(string); ok {
-		meta.PublishDate = publishDate
-	}
-	if dewey, ok := reqData["DeweyDecimal"].(string); ok {
-		meta.DeweyDecimal = dewey
-	}
-	if path, ok := reqData["Path"].(string); ok {
-		meta.Path = path
-	}
-	if fileType, ok := reqData["FileType"].(string); ok {
-		meta.FileType = fileType
-	}
-	if err := doc.SetMetaData(meta); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to set metadata"})
-		return
-	}
-
-	err = h.DaoService.Update(doc)
+	raw, err := h.DaoService.ReadRaw(id)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusNotFound, gin.H{"error": "document not found"})
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "update successful", "value": doc.GetID()})
+	var metadata dao.MetaData
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "stored metadata is invalid"})
+		return
+	}
+	doc, err := h.DocumentFactory.NewDocument(request.DocType)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown document type"})
+		return
+	}
+	metadata.DocType = request.DocType
+	metadata.LastUpdated = time.Now().UTC().Format(time.RFC3339)
+	if request.Title != nil {
+		metadata.Title = strings.TrimSpace(*request.Title)
+	}
+	if request.Author != nil {
+		metadata.Author = strings.TrimSpace(*request.Author)
+	}
+	if request.PublishDate != nil {
+		metadata.PublishDate = *request.PublishDate
+	}
+	if request.Dewey != nil {
+		metadata.DeweyDecimal = strings.TrimSpace(*request.Dewey)
+		if metadata.DeweyDecimal != "" {
+			metadata.ClassificationStatus = "confirmed"
+		} else if metadata.SuggestedDeweyDecimal != "" {
+			metadata.ClassificationStatus = "suggested"
+		} else {
+			metadata.ClassificationStatus = "unclassified"
+		}
+	}
+	if err := doc.SetMetaData(metadata); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update metadata"})
+		return
+	}
+	if err := h.DaoService.Update(doc); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "update successful", "value": id.String()})
 }
 
 func (h *APIHandler) Delete(c *gin.Context) {
@@ -701,6 +680,20 @@ func (h *APIHandler) GetDeweyCategories(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"categories": dao.DeweyCategories})
 }
 
+func (h *APIHandler) SuggestClassification(c *gin.Context) {
+	var request struct {
+		Title   string `json:"title"`
+		Author  string `json:"author"`
+		Content string `json:"content"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid classification request", "details": err.Error()})
+		return
+	}
+	text := strings.Join([]string{request.Title, request.Author, request.Content}, " ")
+	c.JSON(http.StatusOK, gin.H{"suggestions": classification.Suggest(text, 5)})
+}
+
 func (h *APIHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 	groupName := "/data"
 
@@ -712,74 +705,121 @@ func (h *APIHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 		"DELETE /delete":  h.Delete,
 		"GET /types":      h.GetDocumentTypes,
 		"GET /dewey":      h.GetDeweyCategories,
+		"POST /classify":  h.SuggestClassification,
 	}
 
 	return groupName, routes
 }
 
-func StartGrcpService(grpcServer *grpc.Server, fileHandlerService FileHandlerService, port int) <-chan error {
-	errCh := make(chan error, 1)
-	go func() {
-		addr := fmt.Sprintf(":%d", port)
-		lis, err := net.Listen("tcp", addr)
-		if err != nil {
-			errCh <- err
-			log.Fatalf("failed to listen: %v", err)
+func securityHeaders(allowedOrigins []string) gin.HandlerFunc {
+	connectSources := []string{"'self'"}
+	for _, origin := range allowedOrigins {
+		connectSources = append(connectSources, origin)
+	}
+	contentSecurityPolicy := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src " + strings.Join(connectSources, " ") + "; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+	return func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		c.Header("Content-Security-Policy", contentSecurityPolicy)
+		if strings.HasPrefix(c.Request.URL.Path, "/auth/") || strings.HasPrefix(c.Request.URL.Path, "/data/") || strings.HasPrefix(c.Request.URL.Path, "/file/") {
+			c.Header("Cache-Control", "no-store")
 		}
-
-		pb.RegisterFileServiceServer(grpcServer, fileHandlerService)
-
-		log.Printf("gRPC server listening on %s", addr)
-		if err := grpcServer.Serve(lis); err != nil {
-			errCh <- err
-		}
-	}()
-	return errCh
+		c.Next()
+	}
 }
 
-func StartRestAPI(port int, handlers ...Handler) <-chan error {
-	errCh := make(chan error, 1) // Buffered channel to capture errors
-
-	go func() {
-		r := gin.Default()
-		r.Use(cors.Default())
-		for _, handler := range handlers {
-			path, routes := handler.GetRouterGroups()
-			group := r.Group(path) // Create a RouterGroup dynamically
-
-			for route, fn := range routes {
-				parts := strings.Split(route, " ") // Extract method and route path
-				if len(parts) != 2 {
-					log.Printf("invalid route format: %s", route)
-					errCh <- fmt.Errorf("invalid route format: %s", route)
-					return
-				}
-				method, endpoint := parts[0], parts[1]
-
-				// Register route dynamically based on method
-				switch method {
-				case "GET":
-					group.GET(endpoint, fn)
-				case "POST":
-					group.POST(endpoint, fn)
-				case "PUT":
-					group.PUT(endpoint, fn)
-				case "DELETE":
-					group.DELETE(endpoint, fn)
-				default:
-					log.Printf("unsupported method: %s", method)
-					errCh <- fmt.Errorf("unsupported method: %s", method)
-					return
-				}
+func NewHTTPServer(host string, port int, webRoot string, authManager *auth.Manager, allowedOrigins, trustedProxies []string, handlers ...Handler) (*http.Server, error) {
+	if authManager == nil {
+		return nil, fmt.Errorf("authentication manager is required")
+	}
+	r := gin.New()
+	r.Use(gin.Logger(), gin.Recovery(), securityHeaders(allowedOrigins))
+	// Forwarded client addresses are trusted only from explicitly configured
+	// proxy addresses. The reverse proxy must strip client-supplied headers.
+	if err := r.SetTrustedProxies(trustedProxies); err != nil {
+		return nil, fmt.Errorf("disable implicit trusted proxies: %w", err)
+	}
+	if len(allowedOrigins) > 0 {
+		r.Use(cors.New(cors.Config{
+			AllowOrigins:     allowedOrigins,
+			AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-CSRF-Token"},
+			AllowCredentials: true,
+			MaxAge:           12 * time.Hour,
+		}))
+	}
+	authHandlers := &auth.Handlers{Manager: authManager}
+	r.POST("/auth/login", authHandlers.Login)
+	authGroup := r.Group("/auth", authHandlers.RequireSession())
+	authGroup.GET("/me", authHandlers.Me)
+	authGroup.POST("/logout", authHandlers.Logout)
+	authGroup.POST("/password", authHandlers.ChangePassword)
+	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
+	for _, handler := range handlers {
+		path, routes := handler.GetRouterGroups()
+		group := r.Group(path, authHandlers.RequireSession())
+		for route, fn := range routes {
+			parts := strings.Split(route, " ")
+			if len(parts) != 2 {
+				return nil, fmt.Errorf("invalid route format: %s", route)
+			}
+			method, endpoint := parts[0], parts[1]
+			switch method {
+			case http.MethodGet:
+				group.GET(endpoint, fn)
+			case http.MethodPost:
+				group.POST(endpoint, fn)
+			case http.MethodPut:
+				group.PUT(endpoint, fn)
+			case http.MethodDelete:
+				group.DELETE(endpoint, fn)
+			default:
+				return nil, fmt.Errorf("unsupported HTTP method %q for route %s", method, route)
 			}
 		}
+	}
 
-		addr := fmt.Sprintf(":%d", port)
-		// Start the server and capture any errors
-		if err := r.Run(addr); err != nil {
-			errCh <- err
+	if info, err := os.Stat(webRoot); err == nil && info.IsDir() {
+		root, absErr := filepath.Abs(webRoot)
+		if absErr == nil {
+			root, absErr = filepath.EvalSymlinks(root)
 		}
-	}()
+		if absErr == nil {
+			indexPath := filepath.Join(root, "index.html")
+			if indexInfo, indexErr := os.Stat(indexPath); indexErr == nil && indexInfo.Mode().IsRegular() {
+				r.NoRoute(func(c *gin.Context) {
+					if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+						c.Status(http.StatusNotFound)
+						return
+					}
+					relative := strings.TrimPrefix(filepath.Clean("/"+c.Request.URL.Path), string(filepath.Separator))
+					if relative != "" && filepath.IsLocal(relative) {
+						candidate := filepath.Join(root, relative)
+						resolved, resolveErr := filepath.EvalSymlinks(candidate)
+						if resolveErr == nil {
+							withinRoot, relErr := filepath.Rel(root, resolved)
+							fileInfo, statErr := os.Stat(resolved)
+							if relErr == nil && withinRoot != ".." && !strings.HasPrefix(withinRoot, ".."+string(filepath.Separator)) && statErr == nil && fileInfo.Mode().IsRegular() {
+								c.File(resolved)
+								return
+							}
+						}
+					}
+					c.File(indexPath)
+				})
+			}
+		}
+	}
 
-	return errCh // Return the error channel to listen for errors
+	return &http.Server{
+		Addr:              net.JoinHostPort(host, strconv.Itoa(port)),
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}, nil
 }

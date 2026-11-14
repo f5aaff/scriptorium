@@ -6,3 +6,19 @@ src/frontend/wailsjs
 src/backend/storage
 src/frontend/frontend/wailsjs/runtime
 
+
+/src/backend/web/
+
+# Local credentials and environment secrets
+.env
+scriptorium-auth.json
+*.auth.json
+
+# SQLite databases, write-ahead logs and migration backups
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db.bolt.bak
+*.sqlite-migration*

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { API_BASE_URL } from '../config';
+  import { apiFetch } from '../api';
 
   let selectedFile: File | null = null;
   let dragOver = false;
@@ -26,8 +27,8 @@
   async function loadOptions() {
     try {
       const [typesRes, deweyRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/data/types`),
-        fetch(`${API_BASE_URL}/data/dewey`)
+        apiFetch(`${API_BASE_URL}/data/types`),
+        apiFetch(`${API_BASE_URL}/data/dewey`)
       ]);
       if (typesRes.ok) {
         const data = await typesRes.json();

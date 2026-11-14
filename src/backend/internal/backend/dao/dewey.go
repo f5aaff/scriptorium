@@ -7,6 +7,7 @@ type DeweyCategory struct {
 
 var DeweyCategories = []DeweyCategory{
 	{Code: "000", Name: "Computer Science, Information & General Works"},
+	{Code: "004", Name: "Computer Science & Data Processing"},
 	{Code: "010", Name: "Bibliography"},
 	{Code: "020", Name: "Library & Information Sciences"},
 	{Code: "030", Name: "Encyclopedias & Books of Facts"},
