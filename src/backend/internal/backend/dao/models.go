@@ -296,7 +296,9 @@ func fuzzyMatchMetaData(meta MetaData, query string) bool {
 		meta.PublishDate,
 		meta.OriginalFilename,
 		meta.MediaType,
+		meta.MediaKind,
 		meta.ClassificationStatus,
+		meta.ExtractionStatus,
 	}
 	for _, field := range fields {
 		if field != "" && strings.Contains(strings.ToLower(field), query) {
@@ -369,15 +371,18 @@ type MetaData struct {
 	Uuid                     string
 	OriginalFilename         string
 	MediaType                string
+	MediaKind                string
 	Size                     int64
 	SHA256                   string
 	Subjects                 []string
 	ExtraMetadata            map[string]string
 	ClassificationStatus     string
+	ExtractionStatus         string
 	ClassificationConfidence float64
 	ClassificationEvidence   []string
 	SuggestedDeweyDecimal    string
 	SuggestedDeweyName       string
+	ExtractedText            string `json:"-"` // Stored separately and indexed by SQLite; never returned in catalogue listings.
 }
 
 //---------------------------------------------------

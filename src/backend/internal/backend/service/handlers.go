@@ -1,9 +1,6 @@
 package service
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,11 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"scriptorium/internal/backend/auth"
-	"scriptorium/internal/backend/classification"
 	"scriptorium/internal/backend/converter"
 	"scriptorium/internal/backend/dao"
 	"scriptorium/internal/backend/fao"
 	"scriptorium/internal/backend/formats"
+	"scriptorium/internal/backend/ingest"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +27,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxFileSize = 100 * 1024 * 1024 // 100MB
+const maxFileSize = 100 * 1024 * 1024 // 100 MiB
 
 //---------------------------------------------------
 //---------------------HANDLER-----------------------
@@ -49,6 +46,7 @@ type FileHandler struct {
 	FaoService fao.FAO
 	APIHandler *APIHandler
 	Converter  converter.Converter
+	Ingestor   *ingest.Service
 }
 
 func (f *FileHandler) GetService() any {
@@ -56,7 +54,8 @@ func (f *FileHandler) GetService() any {
 }
 
 func NewFileHandler(storage fao.FAO, apiHandler *APIHandler, conv converter.Converter) *FileHandler {
-	return &FileHandler{FaoService: storage, APIHandler: apiHandler, Converter: conv}
+	ingestor, _ := ingest.New(&apiHandler.DaoService, storage, formats.NewDefaultAdapterRegistry(), maxFileSize)
+	return &FileHandler{FaoService: storage, APIHandler: apiHandler, Converter: conv, Ingestor: ingestor}
 }
 
 // UploadFile preserves and catalogues every uploaded file, including unknown formats.
@@ -81,104 +80,30 @@ func (f FileHandler) UploadFile(c *gin.Context) {
 			return
 		}
 	}
-
-	// Peek at the content for MIME identification, then replay those bytes into
-	// storage. The extension is descriptive only; it is not an allowlist.
-	prefix := make([]byte, 512)
-	n, readErr := io.ReadFull(file, prefix)
-	if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "could not inspect uploaded file"})
-		return
-	}
-	prefix = prefix[:n]
-	identification, err := formats.Identify(header.Filename, bytes.NewReader(prefix))
+	result, err := f.Ingestor.Import(c.Request.Context(), ingest.Request{Filename: header.Filename, Metadata: supplied}, file)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "could not identify uploaded file", "details": err.Error()})
-		return
-	}
-	if identification.MediaType == "application/octet-stream" {
-		if byExt := mime.TypeByExtension(identification.Extension); byExt != "" {
-			identification.MediaType = byExt
+		if errors.Is(err, ingest.ErrTooLarge) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file exceeds the 100 MiB upload limit"})
+			return
 		}
-	}
-
-	id := uuid.New()
-	storagePath := id.String()
-	hasher := sha256.New()
-	content := io.MultiReader(bytes.NewReader(prefix), file)
-	if err := f.FaoService.SaveFile(storagePath, io.TeeReader(content, hasher)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store uploaded file", "details": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file import failed", "details": err.Error()})
 		return
 	}
-
-	docType := "File"
-	if value, ok := supplied["DocType"].(string); ok && strings.TrimSpace(value) != "" {
-		docType = value
+	status := http.StatusCreated
+	message := "file imported and catalogued"
+	if result.Duplicate {
+		status = http.StatusOK
+		message = "identical file already exists in the library"
 	}
-	doc, err := f.APIHandler.DocumentFactory.NewDocument(docType)
-	if err != nil {
-		_ = f.FaoService.DeleteFile(storagePath)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown document type", "details": docType})
-		return
-	}
-
-	baseName := filepath.Base(header.Filename)
-	title := strings.TrimSuffix(baseName, filepath.Ext(baseName))
-	meta := dao.MetaData{
-		Uuid:                 id.String(),
-		Title:                title,
-		DocType:              docType,
-		FileType:             identification.Extension,
-		Path:                 storagePath,
-		OriginalFilename:     baseName,
-		MediaType:            identification.MediaType,
-		Size:                 header.Size,
-		SHA256:               hex.EncodeToString(hasher.Sum(nil)),
-		ClassificationStatus: "unclassified",
-		LastUpdated:          time.Now().UTC().Format(time.RFC3339),
-	}
-	if value, ok := supplied["Title"].(string); ok && strings.TrimSpace(value) != "" {
-		meta.Title = value
-	}
-	if value, ok := supplied["Author"].(string); ok {
-		meta.Author = value
-	}
-	if value, ok := supplied["PublishDate"].(string); ok {
-		meta.PublishDate = value
-	}
-	if value, ok := supplied["DeweyDecimal"].(string); ok && value != "" {
-		meta.DeweyDecimal = value
-		meta.ClassificationStatus = "confirmed"
-	}
-	if meta.DeweyDecimal == "" {
-		content, _ := supplied["Content"].(string)
-		suggestions := classification.Suggest(meta.Title+" "+meta.Author+" "+content, 1)
-		if len(suggestions) > 0 {
-			meta.SuggestedDeweyDecimal = suggestions[0].Code
-			meta.SuggestedDeweyName = suggestions[0].Name
-			meta.ClassificationConfidence = suggestions[0].Confidence
-			meta.ClassificationEvidence = suggestions[0].Evidence
-			meta.ClassificationStatus = "suggested"
-		}
-	}
-	if err := doc.SetMetaData(meta); err != nil {
-		_ = f.FaoService.DeleteFile(storagePath)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initialise document metadata"})
-		return
-	}
-	if err := f.APIHandler.DaoService.Create(doc); err != nil {
-		_ = f.FaoService.DeleteFile(storagePath)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to catalogue uploaded file", "details": err.Error()})
-		return
-	}
-	c.JSON(http.StatusCreated, gin.H{
-		"message":           "file imported and catalogued",
-		"file_path":         storagePath,
-		"document_uuid":     id.String(),
-		"original_filename": baseName,
-		"media_type":        identification.MediaType,
-		"kind":              identification.Kind,
-		"sha256":            meta.SHA256,
+	c.JSON(status, gin.H{
+		"message":           message,
+		"document_uuid":     result.Metadata.Uuid,
+		"original_filename": result.Metadata.OriginalFilename,
+		"media_type":        result.Metadata.MediaType,
+		"kind":              result.Kind,
+		"sha256":            result.Metadata.SHA256,
+		"duplicate":         result.Duplicate,
+		"metadata":          result.Metadata,
 	})
 }
 

@@ -13,3 +13,12 @@ src/frontend/frontend/wailsjs/runtime
 .env
 scriptorium-auth.json
 *.auth.json
+
+# SQLite databases, write-ahead logs and migration backups
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db.bolt.bak
+*.sqlite-migration*

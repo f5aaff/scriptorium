@@ -24,7 +24,8 @@ src/
 │       ├── converter/       # Pandoc document conversion
 │       ├── dao/             # Metadata persistence and Dewey categories
 │       ├── fao/             # Storage-root-confined local file access
-│       ├── formats/         # Content-type identification
+│       ├── formats/         # Content identification and extraction adapters
+│       ├── ingest/          # Staged imports, deduplication and catalogue writes
 │       └── service/         # REST API and application services
 └── frontend/
     ├── app.go               # Wails integration
@@ -43,6 +44,10 @@ src/
 - Every upload receives a library record, even when the user supplies no metadata.
 - Original filename, extension, MIME type, byte size and SHA-256 digest are recorded.
 - Original files are preserved in storage under generated identifiers.
+- Imports are staged to a private temporary file before processing.
+- SHA-256 duplicate detection avoids storing the same upload twice; concurrent duplicates are protected by a transactional content-hash registry.
+- Plain text, Markdown, CSV, logs and reStructuredText have bounded UTF-8 text extraction (up to 1 MiB per item); extraction status distinguishes complete, truncated, failed and unsupported formats.
+- Catalogue writes roll back the stored original if persistence fails.
 
 ### Storage safety
 
@@ -55,7 +60,7 @@ src/
 
 - Existing Dewey category endpoint: `GET /data/dewey`.
 - `POST /data/classify` accepts title, author and/or text and returns ranked suggestions with evidence and a heuristic confidence score.
-- Uploads may receive a suggested class based on their title and author.
+- Uploads may receive a suggested class based on their title, author and extracted text.
 - Suggestions remain suggestions; setting a Dewey value through the metadata editor marks the classification as confirmed.
 - The current keyword rules are deliberately conservative and are not a complete DDC classifier or a replacement for the full DDC schedules.
 
@@ -67,23 +72,31 @@ src/
 - File transfer uses the storage abstraction directly; the unauthenticated internal gRPC listener has been removed from application startup.
 - Metadata updates preserve ingestion fields such as the storage path, digest, MIME type and file size.
 
+## Persistence and search
+
+- SQLite is the primary metadata database.
+- Schema migrations are recorded in `schema_migrations`.
+- Existing BoltDB catalogues are migrated automatically on startup. The original is retained as `<DB_PATH>.bolt.bak`; migration refuses to overwrite an existing backup.
+- Extracted text is stored separately from the public metadata JSON and indexed with SQLite FTS5.
+- The content-hash registry prevents new duplicate imports while preserving pre-existing duplicate catalogue records during migration.
+- SQLite is built using `github.com/mattn/go-sqlite3` with its `sqlite_fts5` build tag, so CGO and a C compiler are required. Use the provided Makefile targets or pass the tag explicitly.
+
 ## Not implemented yet
 
 These are explicit remaining product milestones, not implied capabilities:
 
-1. Replace BoltDB with SQLite and introduce versioned schema migrations.
-2. Add background ingestion jobs and format-specific metadata/text extraction adapters.
-3. Add robust duplicate detection and safe re-import workflows.
-4. Add full Dewey hierarchy and a richer classification workflow, including manual review queues.
-5. Add full-text indexing and search within document contents.
-6. Implement embedded PDF, EPUB, text, image, audio and video readers.
-7. Add multi-user accounts, roles, sharing permissions and stronger account recovery.
-8. Add backup/restore, structured audit logging, monitoring and isolated conversion workers.
-9. Add CI, dependency vulnerability gates, reproducible builds, integration tests and release packaging.
+1. Background ingestion jobs, resumable imports and directory/watch-folder import.
+2. Format-specific metadata and text extraction for PDF, EPUB, Office and other binary document formats.
+3. Full Dewey schedules and a richer classification workflow, including review queues and user overrides in the UI.
+4. Embedded PDF, EPUB, text, image, audio and video readers.
+5. Multi-user accounts, roles, sharing permissions and stronger account recovery.
+6. Backup/restore, structured audit logging, monitoring and isolated conversion workers.
+7. CI, dependency vulnerability gates, reproducible builds, integration tests and release packaging.
 
 ## Prerequisites
 
 - Go 1.23 or later.
+- CGO enabled and a working C compiler (GCC or Clang; Xcode Command Line Tools on macOS).
 - Node.js 18 or later and npm.
 - Pandoc is optional and only needed for document conversions that Pandoc supports.
 - Wails v2 CLI for the desktop build.
@@ -94,8 +107,8 @@ These are explicit remaining product milestones, not implied capabilities:
 cd src/backend
 cp ../../.env.example .env # optional; export the values in your shell or use your preferred dotenv loader
 
-go test ./...
-go run .
+CGO_ENABLED=1 go test -tags sqlite_fts5 ./...
+CGO_ENABLED=1 go run -tags sqlite_fts5 .
 ```
 
 The backend reads environment variables directly; it does not currently load `.env` files automatically.
@@ -104,7 +117,7 @@ The backend reads environment variables directly; it does not currently load `.e
 
 | Variable | Default | Description |
 |---|---|---|
-| `DB_PATH` | `./scriptorium.db` | BoltDB metadata database path (legacy persistence; migration to SQLite is planned) |
+| `DB_PATH` | `./scriptorium.db` | SQLite metadata database path; an existing BoltDB file at this path is migrated automatically |
 | `DB_MODE` | `0600` | Database file permissions, in octal |
 | `STORAGE_PATH` | `./storage` | Root directory for original files and derivatives |
 | `REST_HOST` | `127.0.0.1` | API bind address; keep private behind a reverse proxy |
@@ -216,11 +229,11 @@ cd src/backend
 go test ./...
 ```
 
-Tests use temporary directories and databases. The current suite includes storage traversal/symlink protections, format identification, classification suggestions and upload/catalogue metadata preservation.
+Tests use temporary directories and databases. The suite includes storage traversal/symlink protections, format identification and extraction, classification suggestions, SQLite CRUD and FTS indexing, BoltDB migration, duplicate import handling, and upload/catalogue metadata preservation. Run the full suite after dependencies are available; a build with CGO disabled is not supported by the SQLite driver.
 
 ## Project status
 
-The current implementation remains an early foundation, not a finished universal reader. Unknown files can be stored and catalogued, and the backend has a browser-serving path, but format-specific extraction, full-text search, embedded rendering, SQLite migration, multi-user access control, backup/restore, and isolated conversion workers remain outstanding. Authentication is now implemented for a single owner account; see `SECURITY.md` for its limits.
+The current implementation remains an early foundation, not a finished universal reader. Unknown files can be stored and catalogued; a bounded set of text formats can be extracted and indexed; SQLite is the primary catalogue store; and existing BoltDB catalogues are migrated with a retained backup. Background imports, broader format extraction, embedded rendering, multi-user access control, backup/restore, and isolated conversion workers remain outstanding. Authentication is currently implemented for a single owner account; see `SECURITY.md` for its limits.
 
 
 ## Security and remote access

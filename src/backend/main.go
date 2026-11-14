@@ -28,8 +28,15 @@ func main() {
 	//----------------API-HANDLER-SET-UP-----------------
 	//---------------------------------------------------
 
-	var conparams dao.BoltConnectionParams = dao.BoltConnectionParams{Path: cfg.Database.Path, Mode: os.FileMode(cfg.Database.Mode), Opts: nil}
-	var d dao.DAO = &dao.BoltDao{}
+	migrated, err := dao.MigrateBoltToSQLite(cfg.Database.Path, os.FileMode(cfg.Database.Mode))
+	if err != nil {
+		log.Fatalf("error migrating legacy catalogue: %v", err)
+	}
+	if migrated {
+		log.Printf("migrated legacy BoltDB catalogue to SQLite; backup retained at %s.bolt.bak", cfg.Database.Path)
+	}
+	var conparams = dao.SQLiteConnectionParams{Path: cfg.Database.Path, Mode: os.FileMode(cfg.Database.Mode)}
+	var d dao.DAO = &dao.SQLiteDAO{}
 	err = d.Connect(&conparams)
 	if err != nil {
 		log.Fatalf("error instantiating DB: %s", err.Error())
