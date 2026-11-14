@@ -1,0 +1,132 @@
+name: CI and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Test and build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/backend/go.mod
+          cache: true
+          cache-dependency-path: src/backend/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Check Go formatting
+        run: |
+          files=$(gofmt -l $(find src/backend -name '*.go'))
+          if [ -n "$files" ]; then
+            echo "The following Go files need formatting:"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: Test backend
+        working-directory: src/backend
+        env:
+          CGO_ENABLED: 1
+        run: go test -tags sqlite_fts5 ./...
+
+      - name: Check frontend
+        working-directory: src/frontend/frontend
+        run: |
+          npm install --no-audit --no-fund
+          npm run check
+
+      - name: Build frontend
+        working-directory: src/frontend/frontend
+        run: npm run build
+
+      - name: Build backend
+        working-directory: src/backend
+        env:
+          CGO_ENABLED: 1
+        run: |
+          mkdir -p ../../release
+          go build \
+            -tags sqlite_fts5 \
+            -trimpath \
+            -ldflags="-s -w" \
+            -o ../../release/scriptorium \
+            .
+
+      - name: Assemble release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mkdir -p release/web
+
+          cp -a src/frontend/frontend/dist/. release/web/
+
+          cp README.md release/
+          cp SECURITY.md release/
+          cp .env.example release/
+
+          cat > release/INSTALL.txt <<'EOF'
+          Scriptorium - Linux x86-64
+
+          Contents:
+            scriptorium   Go backend executable
+            web/          Browser frontend
+            README.md     Documentation
+            SECURITY.md   Security and deployment guidance
+            .env.example  Example configuration
+
+          To run:
+
+            chmod +x scriptorium
+            ./scriptorium
+
+          The application uses the current directory for its default
+          database and storage paths.
+
+          Configure the application using environment variables.
+          See README.md and .env.example for details.
+
+          SQLite FTS5 requires the included build configuration;
+          no external SQLite installation is required.
+
+          For network access, use an HTTPS reverse proxy and follow
+          the security guidance in SECURITY.md.
+          EOF
+
+          tar -czf "scriptorium-linux-amd64-${GITHUB_REF_NAME}.tar.gz" \
+            -C release .
+
+          sha256sum "scriptorium-linux-amd64-${GITHUB_REF_NAME}.tar.gz" \
+            > SHA256SUMS
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            scriptorium-linux-amd64-${{ github.ref_name }}.tar.gz
+            SHA256SUMS
