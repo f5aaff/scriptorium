@@ -53,6 +53,10 @@
   let editingItem: LibraryItem | null = null;
   let converting = false;
 
+  function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
   async function fetchItems(pageNum: number, searchKeyParam?: string, searchValueParam?: string, fuzzyQuery?: string): Promise<{ items: LibraryItem[], hasMore: boolean }> {
     const params = new URLSearchParams();
     params.append('page', pageNum.toString());
@@ -204,8 +208,8 @@
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       window.open(url, '_blank');
-    } catch (error) {
-      alert(`Failed to open file: ${error.message}`);
+    } catch (error: unknown) {
+      alert(`Failed to open file: ${errorMessage(error)}`);
     }
   }
 
@@ -224,8 +228,8 @@
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       window.open(url, '_blank');
-    } catch (error) {
-      alert(`PDF conversion failed: ${error.message}`);
+    } catch (error: unknown) {
+      alert(`PDF conversion failed: ${errorMessage(error)}`);
     } finally {
       converting = false;
     }
@@ -236,7 +240,6 @@
   }
 
   async function handleEditSave() {
-    const savedItem = editingItem;
     editingItem = null;
     showCard = false;
     selectedItem = null;
@@ -292,8 +295,8 @@
         fallbackDownload(blob, filename);
       }
 
-    } catch (error) {
-      alert(`Download failed: ${error.message}`);
+    } catch (error: unknown) {
+      alert(`Download failed: ${errorMessage(error)}`);
     }
   }
 
@@ -331,7 +334,7 @@
 
       if (!response.ok) {
         if (result.deleted_count > 0) {
-          const hasFileErrors = result.errors && result.errors.some(error =>
+          const hasFileErrors = result.errors && result.errors.some((error: string) =>
             error.includes('Failed to delete file') || error.includes('file')
           );
 
@@ -355,8 +358,8 @@
         selectedItem = null;
       }
 
-    } catch (error) {
-      alert(`Delete failed: ${error.message}`);
+    } catch (error: unknown) {
+      alert(`Delete failed: ${errorMessage(error)}`);
     }
   }
 
@@ -435,9 +438,16 @@
   </div>
 
   {#if showCard && selectedItem}
-    <div class="overlay" on:click={closeCard}>
-      <div class="card" on:click|stopPropagation>
-        <button class="close-button" on:click={closeCard}>
+    {@const item = selectedItem}
+    <div class="overlay">
+      <button
+        type="button"
+        class="overlay-backdrop"
+        aria-label="Close item details"
+        on:click={closeCard}
+      ></button>
+      <section class="card" role="dialog" aria-modal="true" aria-labelledby="item-dialog-title" tabindex="-1">
+        <button type="button" class="close-button" aria-label="Close item details" on:click={closeCard}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -453,89 +463,89 @@
                 </svg>
               </div>
             <div class="card-title-section">
-              <h2>{selectedItem.Title}</h2>
-              <span class="file-type">{selectedItem.FileType}</span>
+              <h2 id="item-dialog-title">{item.Title}</h2>
+              <span class="file-type">{item.FileType}</span>
             </div>
           </div>
 
           <div class="card-details">
             <div class="detail-row">
               <span class="label">Author:</span>
-              <span>{selectedItem.Author}</span>
+              <span>{item.Author}</span>
             </div>
             <div class="detail-row">
               <span class="label">Document Type:</span>
-              <span>{selectedItem.DocType}</span>
+              <span>{item.DocType}</span>
             </div>
             <div class="detail-row">
               <span class="label">File Type:</span>
-              <span>{selectedItem.FileType}</span>
+              <span>{item.FileType}</span>
             </div>
             <div class="detail-row">
               <span class="label">Publish Date:</span>
-              <span>{new Date(selectedItem.PublishDate).toLocaleDateString()}</span>
+              <span>{new Date(item.PublishDate).toLocaleDateString()}</span>
             </div>
             <div class="detail-row">
               <span class="label">Last Updated:</span>
-              <span>{new Date(selectedItem.LastUpdated).toLocaleDateString()}</span>
+              <span>{new Date(item.LastUpdated).toLocaleDateString()}</span>
             </div>
-            {#if selectedItem.DeweyDecimal}
+            {#if item.DeweyDecimal}
               <div class="detail-row">
                 <span class="label">Dewey:</span>
-                <span>{selectedItem.DeweyDecimal}</span>
+                <span>{item.DeweyDecimal}</span>
               </div>
             {/if}
-            {#if selectedItem.SuggestedDeweyDecimal && !selectedItem.DeweyDecimal}
+            {#if item.SuggestedDeweyDecimal && !item.DeweyDecimal}
               <div class="detail-row">
                 <span class="label">Suggested Dewey:</span>
-                <span>{selectedItem.SuggestedDeweyDecimal} — {selectedItem.SuggestedDeweyName} ({Math.round((selectedItem.ClassificationConfidence || 0) * 100)}%)</span>
+                <span>{item.SuggestedDeweyDecimal} — {item.SuggestedDeweyName} ({Math.round((item.ClassificationConfidence || 0) * 100)}%)</span>
               </div>
             {/if}
-            {#if selectedItem.ClassificationStatus}
+            {#if item.ClassificationStatus}
               <div class="detail-row">
                 <span class="label">Classification:</span>
-                <span>{selectedItem.ClassificationStatus}</span>
+                <span>{item.ClassificationStatus}</span>
               </div>
             {/if}
-            {#if selectedItem.MediaType}
+            {#if item.MediaType}
               <div class="detail-row">
                 <span class="label">MIME Type:</span>
-                <span>{selectedItem.MediaType}</span>
+                <span>{item.MediaType}</span>
               </div>
             {/if}
-            {#if selectedItem.Size}
+            {#if item.Size}
               <div class="detail-row">
                 <span class="label">File Size:</span>
-                <span>{(selectedItem.Size / 1024 / 1024).toFixed(2)} MB</span>
+                <span>{(item.Size / 1024 / 1024).toFixed(2)} MB</span>
               </div>
             {/if}
-            {#if selectedItem.SHA256}
+            {#if item.SHA256}
               <div class="detail-row">
                 <span class="label">SHA-256:</span>
-                <span class="id">{selectedItem.SHA256}</span>
+                <span class="id">{item.SHA256}</span>
               </div>
             {/if}
             <div class="detail-row">
               <span class="label">Path:</span>
-              <span class="path">{selectedItem.Path}</span>
+              <span class="path">{item.Path}</span>
             </div>
             <div class="detail-row">
               <span class="label">UUID:</span>
-              <span class="id">{selectedItem.Uuid}</span>
+              <span class="id">{item.Uuid}</span>
             </div>
           </div>
 
           <div class="card-actions">
-            <button class="action-button primary" on:click={() => openItem(selectedItem)}>Open</button>
-            <button class="action-button accent" on:click={() => convertToPdf(selectedItem)} disabled={converting}>
+            <button class="action-button primary" on:click={() => openItem(item)}>Open</button>
+            <button class="action-button accent" on:click={() => convertToPdf(item)} disabled={converting}>
               {converting ? 'Converting...' : 'View as PDF'}
             </button>
-            <button class="action-button" on:click={() => openEditModal(selectedItem)}>Edit</button>
-            <button class="action-button" on:click={() => downloadItem(selectedItem)}>Download</button>
-            <button class="action-button danger" on:click={() => deleteItem(selectedItem)}>Delete</button>
+            <button class="action-button" on:click={() => openEditModal(item)}>Edit</button>
+            <button class="action-button" on:click={() => downloadItem(item)}>Download</button>
+            <button class="action-button danger" on:click={() => deleteItem(item)}>Delete</button>
           </div>
         </div>
-      </div>
+      </section>
     </div>
   {/if}
 
@@ -747,7 +757,19 @@
     padding: 24px;
   }
 
+  .overlay-backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: default;
+  }
+
   .card {
+    z-index: 1;
     background: rgba(44, 44, 46, 0.95);
     backdrop-filter: blur(20px);
     border-radius: 16px;
@@ -843,11 +865,6 @@
     margin-right: 12px;
   }
 
-  .detail-row p {
-    margin: 0;
-    color: rgba(255, 255, 255, 0.9);
-    line-height: 1.5;
-  }
 
   .detail-row span {
     color: rgba(255, 255, 255, 0.9);

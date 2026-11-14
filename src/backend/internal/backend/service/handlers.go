@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"scriptorium/internal/backend/auth"
+	"scriptorium/internal/backend/classification"
 	"scriptorium/internal/backend/converter"
 	"scriptorium/internal/backend/dao"
 	"scriptorium/internal/backend/fao"

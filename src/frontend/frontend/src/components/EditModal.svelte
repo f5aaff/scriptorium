@@ -61,8 +61,8 @@
         throw new Error(result.error || 'Update failed');
       }
       onSave();
-    } catch (e) {
-      error = e.message;
+     } catch (e: unknown) {
+        error = e instanceof Error ? e.message : String(e);
     } finally {
       saving = false;
     }

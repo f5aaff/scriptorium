@@ -68,42 +68,60 @@ func Identify(filename string, source io.Reader) (Identification, error) {
 		}
 	}
 	kind := KindOther
-	switch {
-	case strings.HasPrefix(mediaType, "text/"), strings.Contains(mediaType, "pdf"), strings.Contains(mediaType, "officedocument"), strings.Contains(mediaType, "epub"), strings.Contains(mediaType, "rtf"):
-		kind = KindDocument
-	case strings.HasPrefix(mediaType, "image/"):
-		kind = KindImage
-	case strings.HasPrefix(mediaType, "audio/"):
-		kind = KindAudio
-	case strings.HasPrefix(mediaType, "video/"):
-		kind = KindVideo
-	case strings.Contains(mediaType, "zip"), strings.Contains(mediaType, "gzip"), strings.Contains(mediaType, "x-tar"), strings.Contains(mediaType, "7z"):
-		kind = KindArchive
-	}
+	known := true
+
 	switch ext {
-	case ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub":
+	case ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub",
+		".pdf", ".doc", ".rtf", ".txt", ".md", ".markdown",
+		".html", ".htm", ".csv", ".xml", ".rst", ".log":
 		kind = KindDocument
-	case ".pdf", ".doc", ".rtf", ".txt", ".md", ".html", ".htm", ".csv", ".xml":
-		if kind == KindOther {
-			kind = KindDocument
-		}
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif", ".tiff", ".bmp", ".svg":
-		if kind == KindOther {
-			kind = KindImage
-		}
-	case ".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a":
-		if kind == KindOther {
-			kind = KindAudio
-		}
-	case ".mp4", ".avi", ".mov", ".mkv", ".webm":
-		if kind == KindOther {
-			kind = KindVideo
-		}
-	case ".zip", ".gz", ".tar", ".7z", ".rar":
-		if kind == KindOther {
-			kind = KindArchive
+
+	case ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif",
+		".webp", ".svg", ".ico":
+		kind = KindImage
+
+	case ".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".wma":
+		kind = KindAudio
+
+	case ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm", ".mpeg", ".mpg":
+		kind = KindVideo
+
+	case ".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar":
+		kind = KindArchive
+
+	default:
+		known = false
+
+		// Extensionless files can still be identified from their content.
+		if ext == "" {
+			switch {
+			case strings.HasPrefix(mediaType, "text/"),
+				strings.Contains(mediaType, "pdf"),
+				strings.Contains(mediaType, "officedocument"),
+				strings.Contains(mediaType, "epub"),
+				strings.Contains(mediaType, "rtf"):
+				kind = KindDocument
+			case strings.HasPrefix(mediaType, "image/"):
+				kind = KindImage
+			case strings.HasPrefix(mediaType, "audio/"):
+				kind = KindAudio
+			case strings.HasPrefix(mediaType, "video/"):
+				kind = KindVideo
+			case strings.Contains(mediaType, "zip"),
+				strings.Contains(mediaType, "gzip"),
+				strings.Contains(mediaType, "x-tar"),
+				strings.Contains(mediaType, "7z"):
+				kind = KindArchive
+			}
+
+			known = kind != KindOther
 		}
 	}
-	known := mediaType != "application/octet-stream"
-	return Identification{Extension: ext, MediaType: mediaType, Kind: kind, Known: known}, nil
+
+	return Identification{
+		Extension: ext,
+		MediaType: mediaType,
+		Kind:      kind,
+		Known:     known,
+	}, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/boltdb/bolt"
@@ -186,7 +187,8 @@ func TestWhenSearchByKeyValueExpectRecords(t *testing.T) {
 		t.Errorf("no records retrieved")
 	}
 
-	empty := metas[len(metas)-1] == MetaData{}
+	// I know reflect is frowned upon, but come on
+	empty := reflect.DeepEqual(metas[len(metas)-1], MetaData{})
 	if empty {
 		t.Errorf("metadata empty")
 	}

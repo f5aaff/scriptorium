@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { API_BASE_URL } from '../config';
   import { apiFetch } from '../api';
+  import { SelectFolder } from '../../wailsjs/go/main/App'
 
   const SETTINGS_KEY = 'scriptorium-settings';
 
@@ -20,7 +21,7 @@
   let passwordMessage = '';
   let passwordError = '';
   let changingPassword = false;
-  
+
   const languages = [
     { code: 'en', name: 'English' },
     { code: 'es', name: 'Español' },
@@ -28,13 +29,13 @@
     { code: 'de', name: 'Deutsch' },
     { code: 'ja', name: '日本語' }
   ];
-  
+
   const themes = [
     { value: 'dark', name: 'Dark' },
     { value: 'light', name: 'Light' },
     { value: 'auto', name: 'Auto' }
   ];
-  
+
   const fontSizes = [
     { value: 'small', name: 'Small' },
     { value: 'medium', name: 'Medium' },
@@ -118,7 +119,6 @@
 
   async function selectFolder() {
     try {
-      const { SelectFolder } = await import('../wailsjs/go/main/App');
       const folder = await SelectFolder();
       if (folder) {
         selectedFolder = folder;
@@ -130,7 +130,7 @@
       }
     }
   }
-  
+
   function exportSettings() {
     const settings = {
       darkMode,
@@ -142,7 +142,7 @@
       fontSize,
       selectedFolder
     };
-    
+
     const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -151,7 +151,7 @@
     a.click();
     URL.revokeObjectURL(url);
   }
-  
+
   function importSettings(event: Event) {
     const target = event.target as HTMLInputElement;
     if (target.files && target.files[0]) {
@@ -200,7 +200,7 @@
         </svg>
         Appearance
       </h3>
-      
+
       <div class="setting-item">
         <div class="setting-info">
           <label class="setting-label">Dark Mode</label>
@@ -211,7 +211,7 @@
           <span class="slider"></span>
         </label>
       </div>
-      
+
       <div class="setting-item">
         <div class="setting-info">
           <label class="setting-label">Theme</label>
@@ -223,7 +223,7 @@
           {/each}
         </select>
       </div>
-      
+
       <div class="setting-item">
         <div class="setting-info">
           <label class="setting-label">Font Size</label>
@@ -236,7 +236,7 @@
         </select>
       </div>
     </div>
-    
+
     <!-- General Section -->
     <div class="settings-section">
       <h3 class="section-title">
@@ -249,7 +249,7 @@
         </svg>
         General
       </h3>
-      
+
       <div class="setting-item">
         <div class="setting-info">
           <label class="setting-label">Auto Save</label>
@@ -260,7 +260,7 @@
           <span class="slider"></span>
         </label>
       </div>
-      
+
       <div class="setting-item">
         <div class="setting-info">
           <label class="setting-label">Notifications</label>
@@ -271,7 +271,7 @@
           <span class="slider"></span>
         </label>
       </div>
-      
+
       <div class="setting-item">
         <div class="setting-info">
           <label class="setting-label">Language</label>
@@ -284,7 +284,7 @@
         </select>
       </div>
     </div>
-    
+
     <!-- Sync Section -->
     <div class="settings-section">
       <h3 class="section-title">
@@ -300,7 +300,7 @@
         </svg>
         Sync & Storage
       </h3>
-      
+
       <div class="setting-item">
         <div class="setting-info">
           <label class="setting-label">Cloud Sync</label>
@@ -311,7 +311,7 @@
           <span class="slider"></span>
         </label>
       </div>
-      
+
       <div class="setting-item">
         <div class="setting-info">
           <label class="setting-label">Default Folder</label>
@@ -322,7 +322,7 @@
         </button>
       </div>
     </div>
-    
+
     <!-- Account Security Section -->
     <div class="settings-section">
       <h3 class="section-title">Account security</h3>
@@ -349,7 +349,7 @@
         </svg>
         Import & Export
       </h3>
-      
+
       <div class="setting-item">
         <div class="setting-info">
           <label class="setting-label">Export Settings</label>
@@ -359,7 +359,7 @@
           Export
         </button>
       </div>
-      
+
       <div class="setting-item">
         <div class="setting-info">
           <label class="setting-label">Import Settings</label>
@@ -392,38 +392,38 @@
     overflow-y: auto;
     padding: 0 8px;
   }
-  
+
   .settings-container::-webkit-scrollbar {
     width: 8px;
   }
-  
+
   .settings-container::-webkit-scrollbar-track {
     background: rgba(255, 255, 255, 0.1);
     border-radius: 4px;
   }
-  
+
   .settings-container::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.3);
     border-radius: 4px;
   }
-  
+
   .settings-container::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.5);
   }
-  
+
   .settings-grid {
     display: grid;
     gap: 24px;
     padding: 16px 0;
   }
-  
+
   .settings-section {
     background: rgba(44, 44, 46, 0.8);
     border-radius: 16px;
     padding: 24px;
     border: 1px solid rgba(255, 255, 255, 0.1);
   }
-  
+
   .section-title {
     display: flex;
     align-items: center;
@@ -433,11 +433,11 @@
     color: #ffffff;
     margin: 0 0 20px 0;
   }
-  
+
   .section-title svg {
     color: #007AFF;
   }
-  
+
   .setting-item {
     display: flex;
     align-items: center;
@@ -445,16 +445,16 @@
     padding: 16px 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   }
-  
+
   .setting-item:last-child {
     border-bottom: none;
   }
-  
+
   .setting-info {
     flex: 1;
     margin-right: 16px;
   }
-  
+
   .setting-label {
     display: block;
     font-size: 16px;
@@ -462,14 +462,14 @@
     color: #ffffff;
     margin-bottom: 4px;
   }
-  
+
   .setting-description {
     font-size: 14px;
     color: rgba(255, 255, 255, 0.6);
     margin: 0;
     line-height: 1.4;
   }
-  
+
   /* Toggle Switch */
   .toggle {
     position: relative;
@@ -477,13 +477,13 @@
     width: 50px;
     height: 24px;
   }
-  
+
   .toggle input {
     opacity: 0;
     width: 0;
     height: 0;
   }
-  
+
   .slider {
     position: absolute;
     cursor: pointer;
@@ -495,7 +495,7 @@
     transition: 0.3s;
     border-radius: 24px;
   }
-  
+
   .slider:before {
     position: absolute;
     content: "";
@@ -507,15 +507,15 @@
     transition: 0.3s;
     border-radius: 50%;
   }
-  
+
   input:checked + .slider {
     background-color: #007AFF;
   }
-  
+
   input:checked + .slider:before {
     transform: translateX(26px);
   }
-  
+
   /* Select Dropdown */
   .setting-select {
     background: rgba(255, 255, 255, 0.1);
@@ -527,17 +527,17 @@
     cursor: pointer;
     min-width: 120px;
   }
-  
+
   .setting-select:focus {
     outline: none;
     border-color: #007AFF;
   }
-  
+
   .setting-select option {
     background: rgba(44, 44, 46, 0.95);
     color: #ffffff;
   }
-  
+
   /* Buttons */
   .action-button {
     background: #007AFF;
@@ -550,11 +550,11 @@
     cursor: pointer;
     transition: background-color 0.2s ease;
   }
-  
+
   .action-button:hover {
     background: #0056CC;
   }
-  
+
   .folder-button {
     background: rgba(255, 255, 255, 0.1);
     color: #ffffff;
@@ -566,27 +566,27 @@
     transition: all 0.2s ease;
     min-width: 120px;
   }
-  
+
   .folder-button:hover {
     background: rgba(255, 255, 255, 0.2);
     border-color: rgba(255, 255, 255, 0.3);
   }
-  
+
   @media (max-width: 768px) {
     .settings-grid {
       gap: 16px;
     }
-    
+
     .settings-section {
       padding: 20px;
     }
-    
+
     .setting-item {
       flex-direction: column;
       align-items: flex-start;
       gap: 12px;
     }
-    
+
     .setting-info {
       margin-right: 0;
     }
