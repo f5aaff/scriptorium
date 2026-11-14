@@ -14,6 +14,14 @@
     DeweyDecimal: string;
     Path: string;
     Uuid: string;
+    OriginalFilename?: string;
+    MediaType?: string;
+    Size?: number;
+    SHA256?: string;
+    ClassificationStatus?: string;
+    SuggestedDeweyDecimal?: string;
+    SuggestedDeweyName?: string;
+    ClassificationConfidence?: number;
   }
 
   interface SearchResponse {
@@ -474,6 +482,36 @@
               <div class="detail-row">
                 <span class="label">Dewey:</span>
                 <span>{selectedItem.DeweyDecimal}</span>
+              </div>
+            {/if}
+            {#if selectedItem.SuggestedDeweyDecimal && !selectedItem.DeweyDecimal}
+              <div class="detail-row">
+                <span class="label">Suggested Dewey:</span>
+                <span>{selectedItem.SuggestedDeweyDecimal} — {selectedItem.SuggestedDeweyName} ({Math.round((selectedItem.ClassificationConfidence || 0) * 100)}%)</span>
+              </div>
+            {/if}
+            {#if selectedItem.ClassificationStatus}
+              <div class="detail-row">
+                <span class="label">Classification:</span>
+                <span>{selectedItem.ClassificationStatus}</span>
+              </div>
+            {/if}
+            {#if selectedItem.MediaType}
+              <div class="detail-row">
+                <span class="label">MIME Type:</span>
+                <span>{selectedItem.MediaType}</span>
+              </div>
+            {/if}
+            {#if selectedItem.Size}
+              <div class="detail-row">
+                <span class="label">File Size:</span>
+                <span>{(selectedItem.Size / 1024 / 1024).toFixed(2)} MB</span>
+              </div>
+            {/if}
+            {#if selectedItem.SHA256}
+              <div class="detail-row">
+                <span class="label">SHA-256:</span>
+                <span class="id">{selectedItem.SHA256}</span>
               </div>
             {/if}
             <div class="detail-row">
