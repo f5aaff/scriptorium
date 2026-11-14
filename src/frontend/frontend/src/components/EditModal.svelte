@@ -122,6 +122,16 @@
         </div>
       </div>
 
+      {#if item.SuggestedDeweyDecimal && !item.DeweyDecimal}
+        <div class="classification-suggestion">
+          <div>
+            <strong>Suggested classification</strong>
+            <p>{item.SuggestedDeweyDecimal} — {item.SuggestedDeweyName} ({Math.round((item.ClassificationConfidence || 0) * 100)}% confidence)</p>
+          </div>
+          <button type="button" class="use-suggestion" on:click={() => deweyDecimal = item.SuggestedDeweyDecimal}>Use suggestion</button>
+        </div>
+      {/if}
+
       <div class="form-group">
         <label for="edit-dewey">Dewey Decimal Classification</label>
         {#if deweyCategories.length > 0}
@@ -348,5 +358,38 @@
     .form-row {
       grid-template-columns: 1fr;
     }
+  }
+
+  .classification-suggestion {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    color: #fff;
+  }
+
+  .classification-suggestion p {
+    margin: 4px 0 0;
+    color: rgba(255, 255, 255, 0.68);
+    font-size: 13px;
+  }
+
+  .use-suggestion {
+    flex: 0 0 auto;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+    cursor: pointer;
+  }
+
+  .use-suggestion:hover {
+    background: rgba(255, 255, 255, 0.15);
   }
 </style>
