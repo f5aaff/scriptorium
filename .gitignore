@@ -6,3 +6,5 @@ src/frontend/wailsjs
 src/backend/storage
 src/frontend/frontend/wailsjs/runtime
 
+
+/src/backend/web/
