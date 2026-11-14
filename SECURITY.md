@@ -95,7 +95,7 @@ backups encrypted and test restoration.
 - Login throttling is in-process and per source address. A reverse proxy should
   also enforce request and connection limits.
 - No audit log, alerting, or intrusion detection.
-- No malware scanning or sandbox for uploaded files and conversion tools.
+- No malware scanning or sandbox for uploaded files and conversion tools. Background imports are bounded by per-file and per-batch limits; server-side directory imports are restricted to configured roots and reject traversal, but filesystem race-hardening and hostile-file sandboxing still require review.
   Document converters such as Pandoc must be treated as parsers of untrusted
   input and should be isolated before public deployment.
 - No formal backup/restore workflow or encrypted-at-rest storage yet.

@@ -36,8 +36,8 @@ src/
 
 ### File ingestion
 
-- Multipart upload through `POST /file/upload`.
-- Maximum upload size: 100 MiB.
+- Multipart upload through `POST /file/upload` (synchronous) or `POST /file/imports/upload` (background batch).
+- Maximum upload size: 100 MiB per file; background batches are limited to 1,000 files and 1 GiB total; at most 10 jobs may be queued or running at once.
 - Files are not rejected solely because their extension is unfamiliar.
 - Content type is identified from the file signature where possible, with extension-based MIME fallback.
 - Unknown formats are stored as `application/octet-stream` and remain downloadable.
@@ -48,6 +48,9 @@ src/
 - SHA-256 duplicate detection avoids storing the same upload twice; concurrent duplicates are protected by a transactional content-hash registry.
 - Plain text, Markdown, CSV, logs and reStructuredText have bounded UTF-8 text extraction (up to 1 MiB per item); extraction status distinguishes complete, truncated, failed and unsupported formats.
 - Catalogue writes roll back the stored original if persistence fails.
+- Background batch jobs are persisted in SQLite, report per-file progress, and recover after process restarts. Replayed files are safe because content hashes prevent duplicate catalogue entries.
+- Directory imports are available only below administrator-configured `IMPORT_ROOTS`; the API accepts a root ID and relative path, never an arbitrary server filesystem path. Symlink entries inside imported trees are skipped.
+- Batch source files are staged below `STORAGE_PATH/.jobs` with restrictive permissions before the job is committed to the queue.
 
 ### Storage safety
 
@@ -85,7 +88,7 @@ src/
 
 These are explicit remaining product milestones, not implied capabilities:
 
-1. Background ingestion jobs, resumable imports and directory/watch-folder import.
+1. Automatic watch-folder monitoring and user-facing import-job progress UI.
 2. Format-specific metadata and text extraction for PDF, EPUB, Office and other binary document formats.
 3. Full Dewey schedules and a richer classification workflow, including review queues and user overrides in the UI.
 4. Embedded PDF, EPUB, text, image, audio and video readers.
@@ -119,7 +122,8 @@ The backend reads environment variables directly; it does not currently load `.e
 |---|---|---|
 | `DB_PATH` | `./scriptorium.db` | SQLite metadata database path; an existing BoltDB file at this path is migrated automatically |
 | `DB_MODE` | `0600` | Database file permissions, in octal |
-| `STORAGE_PATH` | `./storage` | Root directory for original files and derivatives |
+| `STORAGE_PATH` | `./storage` | Root directory for original files, derivatives and private ingestion-job staging |
+| `IMPORT_ROOTS` | unset | Optional platform-separated list of existing server-side directories that authenticated users may import from; never accepts arbitrary client paths |
 | `REST_HOST` | `127.0.0.1` | API bind address; keep private behind a reverse proxy |
 | `REST_PORT` | `8080` | API port |
 | `WEB_ROOT` | `./web` | Directory containing the built browser frontend |
@@ -195,7 +199,12 @@ wails build
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/file/upload` | Upload and catalogue any file up to 100 MiB |
+| `POST` | `/file/upload` | Upload and catalogue one file synchronously (100 MiB maximum) |
+| `POST` | `/file/imports/upload` | Queue multipart files (`files` field; `file` also accepted) for background import (1,000 files / 1 GiB per batch) |
+| `GET` | `/file/imports/jobs` | List the latest 25 import jobs and their progress |
+| `GET` | `/file/imports/jobs/:id` | Retrieve one import job |
+| `GET` | `/file/imports/roots` | List configured import-root IDs and display names |
+| `POST` | `/file/imports/directory` | Queue a directory/file import using `{ "root_id": "…", "path": "relative/path" }` |
 | `GET` | `/file/download/:uuid` | Download the original file |
 | `POST` | `/file/convert/:uuid` | Convert supported document formats with Pandoc |
 
@@ -212,6 +221,17 @@ curl -X POST http://127.0.0.1:8080/file/upload \
   -F 'file=@./research.customfmt' \
   -F 'metadata={"Title":"Research notes","Author":"Jane Doe"}'
 
+# Queue a multi-file upload and poll the returned job ID.
+curl -X POST http://127.0.0.1:8080/file/imports/upload \
+  -H "Authorization: Bearer $TOKEN" \
+  -F 'files=@./book.pdf' -F 'files=@./notes.md'
+
+# For configured server-side roots, list IDs then queue a relative directory.
+curl -fsS http://127.0.0.1:8080/file/imports/roots -H "Authorization: Bearer $TOKEN"
+curl -X POST http://127.0.0.1:8080/file/imports/directory \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"root_id":"ROOT_ID_FROM_PREVIOUS_CALL","path":"research"}'
+
 curl -X POST http://127.0.0.1:8080/data/classify \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
@@ -226,14 +246,14 @@ be kept in memory rather than persisted in browser storage.
 
 ```bash
 cd src/backend
-go test ./...
+CGO_ENABLED=1 go test -tags sqlite_fts5 ./...
 ```
 
 Tests use temporary directories and databases. The suite includes storage traversal/symlink protections, format identification and extraction, classification suggestions, SQLite CRUD and FTS indexing, BoltDB migration, duplicate import handling, and upload/catalogue metadata preservation. Run the full suite after dependencies are available; a build with CGO disabled is not supported by the SQLite driver.
 
 ## Project status
 
-The current implementation remains an early foundation, not a finished universal reader. Unknown files can be stored and catalogued; a bounded set of text formats can be extracted and indexed; SQLite is the primary catalogue store; and existing BoltDB catalogues are migrated with a retained backup. Background imports, broader format extraction, embedded rendering, multi-user access control, backup/restore, and isolated conversion workers remain outstanding. Authentication is currently implemented for a single owner account; see `SECURITY.md` for its limits.
+The current implementation remains an early foundation, not a finished universal reader. Unknown files can be stored and catalogued; a bounded set of text formats can be extracted and indexed; SQLite is the primary catalogue store; and existing BoltDB catalogues are migrated with a retained backup. Watch-folder monitoring, broader format extraction, embedded rendering, multi-user access control, backup/restore, and isolated conversion workers remain outstanding. Authentication is currently implemented for a single owner account; see `SECURITY.md` for its limits.
 
 
 ## Security and remote access

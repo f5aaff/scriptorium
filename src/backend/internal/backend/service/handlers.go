@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
@@ -47,6 +48,7 @@ type FileHandler struct {
 	APIHandler *APIHandler
 	Converter  converter.Converter
 	Ingestor   *ingest.Service
+	Jobs       *ingest.JobManager
 }
 
 func (f *FileHandler) GetService() any {
@@ -105,6 +107,126 @@ func (f FileHandler) UploadFile(c *gin.Context) {
 		"duplicate":         result.Duplicate,
 		"metadata":          result.Metadata,
 	})
+}
+
+// ConfigureJobs attaches the durable ingestion queue after the database and
+// configured import roots have been initialised.
+func (f *FileHandler) ConfigureJobs(jobs *ingest.JobManager) { f.Jobs = jobs }
+
+func (f FileHandler) UploadBatch(c *gin.Context) {
+	if f.Jobs == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "background ingestion is unavailable"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, ingest.MaxBatchBytes+(16<<20))
+	form, err := c.MultipartForm()
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "batch exceeds the 1 GiB request limit"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid multipart batch", "details": err.Error()})
+		return
+	}
+	defer form.RemoveAll()
+	files := form.File["files"]
+	if len(files) == 0 {
+		files = form.File["file"]
+	}
+	if len(files) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "provide one or more files in the files field"})
+		return
+	}
+	uploads := make([]ingest.Upload, 0, len(files))
+	opened := make([]multipart.File, 0, len(files))
+	defer func() {
+		for _, file := range opened {
+			_ = file.Close()
+		}
+	}()
+	for _, header := range files {
+		file, err := header.Open()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cannot read uploaded file"})
+			return
+		}
+		opened = append(opened, file)
+		uploads = append(uploads, ingest.Upload{Filename: header.Filename, Reader: file})
+	}
+	job, err := f.Jobs.EnqueueUploads(c.Request.Context(), uploads)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ingest.ErrTooLarge) || errors.Is(err, ingest.ErrBatchTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		if errors.Is(err, dao.ErrJobQueueFull) {
+			status = http.StatusTooManyRequests
+		}
+		c.JSON(status, gin.H{"error": "cannot queue batch import", "details": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"job": job})
+}
+
+func (f FileHandler) ImportDirectory(c *gin.Context) {
+	if f.Jobs == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "background ingestion is unavailable"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	var request struct {
+		RootID string `json:"root_id"`
+		Path   string `json:"path"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid directory import request"})
+		return
+	}
+	job, err := f.Jobs.EnqueueDirectory(c.Request.Context(), request.RootID, request.Path)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ingest.ErrTooLarge) || errors.Is(err, ingest.ErrBatchTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		if errors.Is(err, dao.ErrJobQueueFull) {
+			status = http.StatusTooManyRequests
+		}
+		c.JSON(status, gin.H{"error": "cannot queue directory import", "details": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"job": job})
+}
+func (f FileHandler) ListImportRoots(c *gin.Context) {
+	if f.Jobs == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "background ingestion is unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"roots": f.Jobs.Roots()})
+}
+func (f FileHandler) ListImportJobs(c *gin.Context) {
+	if f.Jobs == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "background ingestion is unavailable"})
+		return
+	}
+	jobs, err := f.Jobs.List(25)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot list import jobs"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
+}
+func (f FileHandler) GetImportJob(c *gin.Context) {
+	if f.Jobs == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "background ingestion is unavailable"})
+		return
+	}
+	job, err := f.Jobs.Get(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "import job not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"job": job})
 }
 
 func (f FileHandler) DownloadFile(c *gin.Context) {
@@ -222,9 +344,14 @@ func (f *FileHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 	groupName := "/file"
 
 	routes := map[string]gin.HandlerFunc{
-		"POST /upload":        f.UploadFile,
-		"GET /download/:uuid": f.DownloadFile,
-		"POST /convert/:uuid": f.ConvertFile,
+		"POST /upload":            f.UploadFile,
+		"POST /imports/upload":    f.UploadBatch,
+		"POST /imports/directory": f.ImportDirectory,
+		"GET /imports/roots":      f.ListImportRoots,
+		"GET /imports/jobs":       f.ListImportJobs,
+		"GET /imports/jobs/:id":   f.GetImportJob,
+		"GET /download/:uuid":     f.DownloadFile,
+		"POST /convert/:uuid":     f.ConvertFile,
 	}
 
 	return groupName, routes

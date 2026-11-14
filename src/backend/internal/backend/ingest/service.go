@@ -88,7 +88,7 @@ func (s *Service) Import(ctx context.Context, request Request, source io.Reader)
 	defer staged.Close()
 
 	hasher := sha256.New()
-	written, err := io.Copy(io.MultiWriter(staged, hasher), io.LimitReader(source, s.maxBytes+1))
+	written, err := io.Copy(io.MultiWriter(staged, hasher), io.LimitReader(contextReader{ctx: ctx, reader: source}, s.maxBytes+1))
 	if err != nil {
 		return Result{}, fmt.Errorf("stage uploaded file: %w", err)
 	}
@@ -97,6 +97,9 @@ func (s *Service) Import(ctx context.Context, request Request, source io.Reader)
 	}
 	if written > s.maxBytes {
 		return Result{}, fmt.Errorf("%w (%d bytes)", ErrTooLarge, s.maxBytes)
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
 	}
 	if err := staged.Sync(); err != nil {
 		return Result{}, fmt.Errorf("sync staged upload: %w", err)
@@ -126,6 +129,9 @@ func (s *Service) Import(ctx context.Context, request Request, source io.Reader)
 	if s.adapters.Supports(filename) {
 		extractionStatus = "complete"
 	}
+	if ctx.Err() != nil {
+		return Result{}, ctx.Err()
+	}
 	if err != nil {
 		extractionStatus = "failed"
 		// Extraction is an enhancement, not a condition of acceptance. Keep the
@@ -142,6 +148,12 @@ func (s *Service) Import(ctx context.Context, request Request, source io.Reader)
 	}
 	if err := s.storage.SaveFile(storagePath, io.LimitReader(staged, s.maxBytes)); err != nil {
 		return Result{}, fmt.Errorf("store original file: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		if cleanupErr := s.storage.DeleteFile(storagePath); cleanupErr != nil {
+			return Result{}, fmt.Errorf("cancelled import and failed to remove stored original: %w", cleanupErr)
+		}
+		return Result{}, err
 	}
 
 	docType := stringValue(request.Metadata["DocType"], "File")

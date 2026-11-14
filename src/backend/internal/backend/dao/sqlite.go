@@ -103,6 +103,20 @@ CREATE TABLE IF NOT EXISTS content_hashes (
 );
 CREATE INDEX IF NOT EXISTS idx_documents_dewey ON documents(json_extract(metadata_json, '$.DeweyDecimal'));
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(id UNINDEXED, search_text, tokenize='unicode61 remove_diacritics 2');
+CREATE TABLE IF NOT EXISTS ingestion_jobs (
+    id TEXT PRIMARY KEY NOT NULL,
+    status TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    total INTEGER NOT NULL DEFAULT 0,
+    processed INTEGER NOT NULL DEFAULT 0,
+    failed INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT NOT NULL DEFAULT '',
+    finished_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_created ON ingestion_jobs(created_at DESC);
 INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, CURRENT_TIMESTAMP);
 `
 	if _, err := db.Exec(schema); err != nil {
@@ -117,7 +131,7 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, CURRENT_
 			return err
 		}
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_documents_sha256 ON documents(sha256); INSERT OR IGNORE INTO content_hashes(sha256, document_id) SELECT sha256, MIN(id) FROM documents WHERE sha256 <> '' GROUP BY sha256; INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, CURRENT_TIMESTAMP);`); err != nil {
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_documents_sha256 ON documents(sha256); INSERT OR IGNORE INTO content_hashes(sha256, document_id) SELECT sha256, MIN(id) FROM documents WHERE sha256 <> '' GROUP BY sha256; INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, CURRENT_TIMESTAMP); INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, CURRENT_TIMESTAMP);`); err != nil {
 		return fmt.Errorf("apply SQLite schema migration 2: %w", err)
 	}
 	return nil

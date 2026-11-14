@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"scriptorium/internal/backend/auth"
 	"scriptorium/internal/backend/config"
 	"scriptorium/internal/backend/converter"
 	"scriptorium/internal/backend/dao"
 	"scriptorium/internal/backend/fao"
+	"scriptorium/internal/backend/ingest"
 	"scriptorium/internal/backend/service"
 	"syscall"
 	"time"
@@ -83,6 +85,23 @@ func main() {
 	apiHandler := service.NewAPIHandler(daos, docFactory, f)
 
 	fileHandler := service.NewFileHandler(f, apiHandler, pandocConverter)
+	jobRepository, ok := d.(ingest.JobRepository)
+	if !ok {
+		log.Fatalf("configured database does not support durable ingestion jobs")
+	}
+	jobManager, err := ingest.NewJobManager(jobRepository, fileHandler.Ingestor, filepath.Join(cfg.Storage.Path, ".jobs"), cfg.Import.Roots, ingest.DefaultJobWorkers)
+	if err != nil {
+		log.Fatalf("failed to initialise ingestion jobs: %v", err)
+	}
+	jobManager.Start(context.Background())
+	fileHandler.ConfigureJobs(jobManager)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := jobManager.Stop(ctx); err != nil {
+			log.Printf("ingestion worker shutdown: %v", err)
+		}
+	}()
 
 	//---------------------------------------------------
 	//-------------------SERVICE-START-------------------

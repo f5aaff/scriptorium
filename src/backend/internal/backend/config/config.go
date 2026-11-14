@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -15,6 +16,7 @@ type Config struct {
 	Storage  StorageConfig
 	Server   ServerConfig
 	Auth     AuthConfig
+	Import   ImportConfig
 }
 
 // DatabaseConfig represents database configuration
@@ -26,6 +28,10 @@ type DatabaseConfig struct {
 // StorageConfig represents storage configuration
 type StorageConfig struct {
 	Path string
+}
+
+type ImportConfig struct {
+	Roots []string
 }
 
 // ServerConfig represents server configuration
@@ -61,6 +67,25 @@ func LoadConfig() (*Config, error) {
 
 	// Storage configuration
 	config.Storage.Path = getEnv("STORAGE_PATH", "./storage")
+	for _, root := range filepath.SplitList(os.Getenv("IMPORT_ROOTS")) {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			return nil, fmt.Errorf("resolve IMPORT_ROOTS entry %q: %w", root, err)
+		}
+		resolved, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return nil, fmt.Errorf("IMPORT_ROOTS entry %q must exist and resolve: %w", root, err)
+		}
+		info, err := os.Stat(resolved)
+		if err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("IMPORT_ROOTS entry %q must be a directory", root)
+		}
+		config.Import.Roots = append(config.Import.Roots, filepath.Clean(resolved))
+	}
 
 	// Server configuration
 	restPortStr := getEnv("REST_PORT", "8080")
