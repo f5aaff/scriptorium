@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"scriptorium/internal/backend/fao"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 func setupTestRouter(t *testing.T) (*gin.Engine, *APIHandler, func()) {
@@ -34,6 +36,7 @@ func setupTestRouter(t *testing.T) (*gin.Engine, *APIHandler, func()) {
 	f := fao.NewLocalFao(storagePath)
 
 	docFactory := dao.NewDocumentFactory()
+	docFactory.RegisterDocumentType("File", func() dao.Document { return &dao.Notes{} })
 	docFactory.RegisterDocumentType("Notes", func() dao.Document { return &dao.Notes{} })
 	docFactory.RegisterDocumentType("Book", func() dao.Document { return &dao.Notes{} })
 
@@ -312,5 +315,153 @@ func TestCreateWithInvalidDocType(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid doc type, got %d", w.Code)
+	}
+}
+
+func TestUploadCataloguesUnknownFileFormats(t *testing.T) {
+	apiRouter, api, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	storage := api.FaoService
+	fileHandler := NewFileHandler(storage, api, nil)
+	router := gin.New()
+	_, routes := fileHandler.GetRouterGroups()
+	group := router.Group("/file")
+	for route, handler := range routes {
+		parts := strings.Split(route, " ")
+		if len(parts) == 2 && parts[0] == http.MethodPost {
+			group.POST(parts[1], handler)
+		}
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "research.customfmt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("proprietary document payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("metadata", `{"Title":"Research notes"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/file/upload", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", response.Code, response.Body.String())
+	}
+
+	var result struct {
+		UUID string `json:"document_uuid"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.UUID == "" {
+		t.Fatal("upload response did not include document UUID")
+	}
+
+	id, err := uuid.Parse(result.UUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := api.DaoService.ReadRaw(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata dao.MetaData
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.OriginalFilename != "research.customfmt" {
+		t.Fatalf("original filename not preserved: %+v", metadata)
+	}
+	if metadata.SHA256 == "" || metadata.Size == 0 {
+		t.Fatalf("integrity metadata missing: %+v", metadata)
+	}
+	if metadata.Path == "" || !storage.FileExists(metadata.Path) {
+		t.Fatalf("stored file missing: %+v", metadata)
+	}
+
+	updateBody := []byte(`{"Uuid":"` + result.UUID + `","DocType":"Notes","Title":"Updated research notes","DeweyDecimal":"004"}`)
+	updateRequest := httptest.NewRequest(http.MethodPut, "/data/update", bytes.NewReader(updateBody))
+	updateRequest.Header.Set("Content-Type", "application/json")
+	updateResponse := httptest.NewRecorder()
+	apiRouter.ServeHTTP(updateResponse, updateRequest)
+	if updateResponse.Code != http.StatusOK {
+		t.Fatalf("metadata update failed: %d %s", updateResponse.Code, updateResponse.Body.String())
+	}
+
+	updatedRaw, err := api.DaoService.ReadRaw(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var updated dao.MetaData
+	if err := json.Unmarshal(updatedRaw, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.SHA256 != metadata.SHA256 || updated.Path != metadata.Path || updated.Size != metadata.Size {
+		t.Fatalf("metadata update discarded ingestion fields: before=%+v after=%+v", metadata, updated)
+	}
+	if updated.ClassificationStatus != "confirmed" || updated.DeweyDecimal != "004" {
+		t.Fatalf("manual classification was not confirmed: %+v", updated)
+	}
+}
+
+func TestSuggestClassificationEndpoint(t *testing.T) {
+	router, _, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	request := httptest.NewRequest(http.MethodPost, "/data/classify", strings.NewReader(`{"title":"Go programming and software architecture"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"code":"004"`) {
+		t.Fatalf("expected computer science suggestion, got %s", response.Body.String())
+	}
+}
+
+func TestHTTPServerServesHealthAndBrowserFrontend(t *testing.T) {
+	_, api, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	webRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(webRoot, "index.html"), []byte("scriptorium-ui"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(webRoot, "assets"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webRoot, "assets", "app.js"), []byte("console.log('ok')"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fileHandler := NewFileHandler(api.FaoService, api, nil)
+	server, err := NewHTTPServer("127.0.0.1", 8080, webRoot, api, fileHandler)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct{ path, want string }{
+		{path: "/healthz", want: `"status":"ok"`},
+		{path: "/library/entry/123", want: "scriptorium-ui"},
+		{path: "/assets/app.js", want: "console.log('ok')"},
+	} {
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		response := httptest.NewRecorder()
+		server.Handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), test.want) {
+			t.Errorf("GET %s: got status %d body %q", test.path, response.Code, response.Body.String())
+		}
 	}
 }

@@ -2,17 +2,12 @@ package service
 
 import (
 	"fmt"
-	"io"
-	"log"
 	"scriptorium/internal/backend/converter"
 	"scriptorium/internal/backend/dao"
 	"scriptorium/internal/backend/fao"
 	"strings"
 
-	pb "scriptorium/internal/backend/service/pb"
-
 	"github.com/google/uuid"
-	"google.golang.org/grpc"
 )
 
 type Service interface {
@@ -53,96 +48,6 @@ func (fcs FileConverterService) Convert(file dao.MetaData, toFormat string) (str
 		return "", fmt.Errorf("conversion failed: %w", err)
 	}
 	return outputPath, nil
-}
-
-//---------------------------------------------------
-//--------------FILE-HANDLER-SERVICE-----------------
-//---------------------------------------------------
-
-type FileHandlerService struct {
-	// this is here for future proofing, it has some empty default methods.
-	pb.UnimplementedFileServiceServer
-	fao fao.FAO
-}
-
-func (fhs FileHandlerService) New(f any) (Service, error) {
-	fao, ok := f.(fao.FAO)
-	if !ok {
-		return nil, fmt.Errorf("f is not a valid FAO")
-	}
-	faos := FileHandlerService{fao: fao}
-
-	return faos, nil
-}
-func (fhs FileHandlerService) UploadFile(stream grpc.ClientStreamingServer[pb.FileChunk, pb.FileUploadResponse]) error {
-	log.Println("receiving file...")
-
-	var fileData *io.PipeWriter
-	var fileReader io.Reader
-	var firstChunk = true
-	var filename string
-
-	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
-			if fileData != nil {
-				_ = fileData.Close() // close writer after all chunks
-			}
-			return stream.SendAndClose(&pb.FileUploadResponse{Message: "Upload complete"})
-		}
-		if err != nil {
-			log.Println("failed to receive chunk:", err)
-			return fmt.Errorf("failed to receive chunk: %w", err)
-		}
-
-		if firstChunk {
-			// assume first chunk contains filename in a field
-			filename = chunk.Filename
-			fileReader, fileData = io.Pipe()
-			go func() {
-				if err := fhs.fao.SaveFile(filename, fileReader); err != nil {
-					log.Println("failed to save file:", err)
-				}
-			}()
-			firstChunk = false
-		}
-
-		_, err = fileData.Write(chunk.Data)
-		if err != nil {
-			log.Println("failed to write chunk:", err)
-			return fmt.Errorf("failed to write chunk: %w", err)
-		}
-	}
-}
-
-// DownloadFile streams a file in chunks
-func (s FileHandlerService) DownloadFile(req *pb.FileRequest, stream grpc.ServerStreamingServer[pb.FileChunk]) error {
-	fmt.Printf("Streaming file: %s\n", req.Filename)
-
-	// Get file reader
-	file, err := s.fao.GetFile(req.Filename)
-	if err != nil {
-		return fmt.Errorf("failed to open file: %w", err)
-	}
-	defer file.Close()
-
-	// Stream file in chunks
-	buf := make([]byte, 4096)
-	for {
-		n, err := file.Read(buf)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("failed to read file: %w", err)
-		}
-
-		if err := stream.Send(&pb.FileChunk{Data: buf[:n]}); err != nil {
-			return fmt.Errorf("failed to send chunk: %w", err)
-		}
-	}
-
-	return nil
 }
 
 //---------------------------------------------------
