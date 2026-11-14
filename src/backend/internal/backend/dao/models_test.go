@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/boltdb/bolt"
@@ -252,5 +253,29 @@ func TestWhenDeleteRecordExpectDeletedRecord(t *testing.T) {
 	_, err = db.Read(&d, docUUID)
 	if err == nil {
 		t.Errorf("document found, deletion failed")
+	}
+}
+
+func TestEmptyLibraryReturnsEmptySearchResults(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "empty.db")
+	db := &BoltDao{}
+	if err := db.Connect(&BoltConnectionParams{Path: dbPath, Mode: 0600}); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Disconnect()
+
+	all, err := db.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll on an empty library should succeed: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("expected no documents, got %d", len(all))
+	}
+	matches, err := db.FuzzySearch("anything")
+	if err != nil {
+		t.Fatalf("FuzzySearch on an empty library should succeed: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected no matches, got %d", len(matches))
 	}
 }
