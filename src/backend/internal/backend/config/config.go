@@ -26,8 +26,9 @@ type StorageConfig struct {
 
 // ServerConfig represents server configuration
 type ServerConfig struct {
+	RestHost string
 	RestPort int
-	GrpcPort int
+	WebRoot  string
 }
 
 // LoadConfig loads configuration from environment variables
@@ -55,12 +56,8 @@ func LoadConfig() (*Config, error) {
 	}
 	config.Server.RestPort = restPort
 
-	grpcPortStr := getEnv("GRPC_PORT", "5001")
-	grpcPort, err := strconv.Atoi(grpcPortStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid GRPC_PORT: %s", grpcPortStr)
-	}
-	config.Server.GrpcPort = grpcPort
+	config.Server.RestHost = getEnv("REST_HOST", "127.0.0.1")
+	config.Server.WebRoot = getEnv("WEB_ROOT", "./web")
 
 	return config, nil
 }
