@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"scriptorium/internal/backend/auth"
 	"scriptorium/internal/backend/dao"
 	"scriptorium/internal/backend/fao"
 
@@ -447,7 +448,11 @@ func TestHTTPServerServesHealthAndBrowserFrontend(t *testing.T) {
 	}
 
 	fileHandler := NewFileHandler(api.FaoService, api, nil)
-	server, err := NewHTTPServer("127.0.0.1", 8080, webRoot, api, fileHandler)
+	authManager, err := auth.NewManager(filepath.Join(t.TempDir(), "auth.json"), "owner", "a-secure-test-password", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewHTTPServer("127.0.0.1", 8080, webRoot, authManager, nil, nil, api, fileHandler)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,5 +468,71 @@ func TestHTTPServerServesHealthAndBrowserFrontend(t *testing.T) {
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), test.want) {
 			t.Errorf("GET %s: got status %d body %q", test.path, response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestHTTPServerProtectsLibraryRoutes(t *testing.T) {
+	_, api, cleanup := setupTestRouter(t)
+	defer cleanup()
+	manager, err := auth.NewManager(filepath.Join(t.TempDir(), "auth.json"), "owner", "a-secure-test-password", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewHTTPServer("127.0.0.1", 8080, t.TempDir(), manager, nil, nil, api)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/data/search", nil)
+	response := httptest.NewRecorder()
+	server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated library request should be rejected, got %d", response.Code)
+	}
+
+	loginBody := bytes.NewBufferString(`{"username":"owner","password":"a-secure-test-password"}`)
+	request = httptest.NewRequest(http.MethodPost, "/auth/login", loginBody)
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("login should succeed, got %d: %s", response.Code, response.Body.String())
+	}
+	var loginResult struct {
+		CSRFToken    string `json:"csrf_token"`
+		SessionToken string `json:"session_token"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &loginResult); err != nil || loginResult.CSRFToken == "" || loginResult.SessionToken == "" {
+		t.Fatalf("login response should contain CSRF token: %v", err)
+	}
+	cookies := response.Result().Cookies()
+	request = httptest.NewRequest(http.MethodGet, "/data/search", nil)
+	for _, cookie := range cookies {
+		request.AddCookie(cookie)
+	}
+	response = httptest.NewRecorder()
+	server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("authenticated cookie request should succeed, got %d: %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/data/create", bytes.NewBufferString(`{"DocType":"Notes","Title":"Missing CSRF"}`))
+	request.Header.Set("Content-Type", "application/json")
+	for _, cookie := range cookies {
+		request.AddCookie(cookie)
+	}
+	response = httptest.NewRecorder()
+	server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("cookie-authenticated mutation without CSRF should be rejected, got %d", response.Code)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/data/create", bytes.NewBufferString(`{"DocType":"Notes","Title":"Bearer client"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+loginResult.SessionToken)
+	response = httptest.NewRecorder()
+	server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("authenticated bearer mutation should succeed, got %d: %s", response.Code, response.Body.String())
 	}
 }

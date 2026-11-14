@@ -8,6 +8,7 @@ Wails v2 desktop application wrapping a Svelte SPA. Provides a native window wit
 - **Node.js** 18+ and npm
 - **Wails CLI** v2 — install with `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
 - The Scriptorium REST backend must be running (default `127.0.0.1:8080`) for data and file operations. File transfers use the REST API and local storage; the old gRPC listener has been removed.
+- Sign-in is required. The browser client uses HttpOnly cookies and CSRF protection; the Wails client uses an in-memory bearer session. For cross-origin desktop or development clients, configure the exact frontend origin in `CORS_ALLOWED_ORIGINS` on the backend.
 
 ## Project Structure
 
@@ -46,7 +47,7 @@ npm install
 npm run dev
 ```
 
-This runs the Svelte app in the browser at `http://localhost:5173`. Set `VITE_API_BASE_URL` to the backend URL when the frontend and API use different origins, for example `VITE_API_BASE_URL=http://192.168.1.20:8080 npm run dev -- --host 0.0.0.0`.
+This runs the Svelte app in the browser at `http://localhost:5173`. Set `VITE_API_BASE_URL` to the backend URL and add the exact Vite origin to `CORS_ALLOWED_ORIGINS` on the backend. For local HTTP development, set `COOKIE_SECURE=false` and `ALLOW_INSECURE_COOKIES=true` together. Do not use those settings outside local development.
 
 ## Building
 
@@ -74,7 +75,7 @@ The compiled binary is output to `build/bin/`. Platform-specific assets (icons, 
 
 | Variable | Default | Description |
 |---|---|---|
-| `VITE_API_BASE_URL` | `http://localhost:8080` | Backend API URL used by the Svelte frontend |
+| `VITE_API_BASE_URL` | Same-origin in browser; `http://localhost:8080` in Wails | Backend API URL used by the Svelte frontend |
 
 Set this in a `.env` file in the `frontend/` directory or as an environment variable before building.
 
@@ -95,5 +96,5 @@ These are auto-generated into `frontend/src/wailsjs/` by Wails and can be import
 | **Library** | Browse, search (fuzzy + prefix filters), open, convert to PDF, edit metadata, download, delete |
 | **Add** | Upload files with metadata — document type dropdown, Dewey Decimal selector, image preview, validation |
 | **EditModal** | Modal for editing document metadata (title, author, type, Dewey, publish date) |
-| **Settings** | Preferences persisted to localStorage — theme, font size, language, sync, folder selection |
+| **Settings** | Preferences persisted to localStorage, plus owner password change |
 | **Sidebar** | Navigation between views |

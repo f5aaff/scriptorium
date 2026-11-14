@@ -8,3 +8,8 @@ src/frontend/frontend/wailsjs/runtime
 
 
 /src/backend/web/
+
+# Local credentials and environment secrets
+.env
+scriptorium-auth.json
+*.auth.json

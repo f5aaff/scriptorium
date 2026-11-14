@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { API_BASE_URL } from '../config';
+  import { apiFetch } from '../api';
 
   const SETTINGS_KEY = 'scriptorium-settings';
 
@@ -12,6 +14,12 @@
   let fontSize = 'medium';
   let selectedFolder = '';
   let initialized = false;
+  let currentPassword = '';
+  let newPassword = '';
+  let confirmPassword = '';
+  let passwordMessage = '';
+  let passwordError = '';
+  let changingPassword = false;
   
   const languages = [
     { code: 'en', name: 'English' },
@@ -71,6 +79,40 @@
     darkMode; autoSave; notifications; syncEnabled; language; theme; fontSize; selectedFolder;
     if (initialized) {
       saveSettings();
+    }
+  }
+
+  async function changePassword(event: Event) {
+    event.preventDefault();
+    passwordMessage = '';
+    passwordError = '';
+    if (newPassword !== confirmPassword) {
+      passwordError = 'The new passwords do not match.';
+      return;
+    }
+    const passwordBytes = new TextEncoder().encode(newPassword).length;
+    if ([...newPassword].length < 12 || passwordBytes > 72) {
+      passwordError = 'Use at least 12 characters and no more than 72 UTF-8 bytes.';
+      return;
+    }
+    changingPassword = true;
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/auth/password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Password change failed');
+      passwordMessage = 'Password changed. Sign in again with your new password.';
+      currentPassword = '';
+      newPassword = '';
+      confirmPassword = '';
+      setTimeout(() => window.location.reload(), 900);
+    } catch (error) {
+      passwordError = error instanceof Error ? error.message : 'Password change failed';
+    } finally {
+      changingPassword = false;
     }
   }
 
@@ -281,6 +323,22 @@
       </div>
     </div>
     
+    <!-- Account Security Section -->
+    <div class="settings-section">
+      <h3 class="section-title">Account security</h3>
+      <form class="password-form" on:submit={changePassword}>
+        <label for="current-password">Current password</label>
+        <input id="current-password" type="password" bind:value={currentPassword} autocomplete="current-password" required />
+        <label for="new-password">New password</label>
+        <input id="new-password" type="password" bind:value={newPassword} autocomplete="new-password" minlength="12" maxlength="72" required />
+        <label for="confirm-password">Confirm new password</label>
+        <input id="confirm-password" type="password" bind:value={confirmPassword} autocomplete="new-password" minlength="12" maxlength="72" required />
+        {#if passwordError}<p class="password-error" role="alert">{passwordError}</p>{/if}
+        {#if passwordMessage}<p class="password-success" role="status">{passwordMessage}</p>{/if}
+        <button class="action-button" type="submit" disabled={changingPassword}>{changingPassword ? 'Changing…' : 'Change password'}</button>
+      </form>
+    </div>
+
     <!-- Import/Export Section -->
     <div class="settings-section">
       <h3 class="section-title">
@@ -317,6 +375,18 @@
 </div>
 
 <style>
+  .password-form { display: flex; flex-direction: column; gap: 10px; }
+  .password-form label { color: #ddd; font-size: 13px; }
+  .password-form input {
+    padding: 10px 12px;
+    color: #fff;
+    background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.2);
+    border-radius: 8px;
+  }
+  .password-error { color: #ff8c8c; font-size: 13px; }
+  .password-success { color: #78dba1; font-size: 13px; }
+
   .settings-container {
     height: 100%;
     overflow-y: auto;

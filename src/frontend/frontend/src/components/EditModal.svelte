@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { API_BASE_URL } from '../config';
+  import { apiFetch } from '../api';
 
   export let item: any;
   export let onSave: () => void;
@@ -20,8 +21,8 @@
   async function loadOptions() {
     try {
       const [typesRes, deweyRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/data/types`),
-        fetch(`${API_BASE_URL}/data/dewey`)
+        apiFetch(`${API_BASE_URL}/data/types`),
+        apiFetch(`${API_BASE_URL}/data/dewey`)
       ]);
       if (typesRes.ok) {
         const data = await typesRes.json();
@@ -40,7 +41,7 @@
     saving = true;
     error = '';
     try {
-      const response = await fetch(`${API_BASE_URL}/data/update`, {
+      const response = await apiFetch(`${API_BASE_URL}/data/update`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

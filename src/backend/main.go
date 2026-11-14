@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"scriptorium/internal/backend/auth"
 	"scriptorium/internal/backend/config"
 	"scriptorium/internal/backend/converter"
 	"scriptorium/internal/backend/dao"
@@ -80,7 +81,12 @@ func main() {
 	//-------------------SERVICE-START-------------------
 	//---------------------------------------------------
 
-	server, err := service.NewHTTPServer(cfg.Server.RestHost, cfg.Server.RestPort, cfg.Server.WebRoot, apiHandler, fileHandler)
+	authManager, err := auth.NewManager(cfg.Auth.File, cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.CookieSecure)
+	if err != nil {
+		log.Fatalf("failed to initialise authentication: %v", err)
+	}
+
+	server, err := service.NewHTTPServer(cfg.Server.RestHost, cfg.Server.RestPort, cfg.Server.WebRoot, authManager, cfg.Server.AllowedOrigins, cfg.Server.TrustedProxies, apiHandler, fileHandler)
 	if err != nil {
 		log.Fatalf("failed to configure HTTP server: %v", err)
 	}

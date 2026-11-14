@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"scriptorium/internal/backend/auth"
 	"scriptorium/internal/backend/classification"
 	"scriptorium/internal/backend/converter"
 	"scriptorium/internal/backend/dao"
@@ -298,7 +299,7 @@ func (f *FileHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 	routes := map[string]gin.HandlerFunc{
 		"POST /upload":        f.UploadFile,
 		"GET /download/:uuid": f.DownloadFile,
-		"GET /convert/:uuid":  f.ConvertFile,
+		"POST /convert/:uuid": f.ConvertFile,
 	}
 
 	return groupName, routes
@@ -658,13 +659,55 @@ func (h *APIHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 	return groupName, routes
 }
 
-func NewHTTPServer(host string, port int, webRoot string, handlers ...Handler) (*http.Server, error) {
-	r := gin.Default()
-	r.Use(cors.Default())
+func securityHeaders(allowedOrigins []string) gin.HandlerFunc {
+	connectSources := []string{"'self'"}
+	for _, origin := range allowedOrigins {
+		connectSources = append(connectSources, origin)
+	}
+	contentSecurityPolicy := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src " + strings.Join(connectSources, " ") + "; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+	return func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		c.Header("Content-Security-Policy", contentSecurityPolicy)
+		if strings.HasPrefix(c.Request.URL.Path, "/auth/") || strings.HasPrefix(c.Request.URL.Path, "/data/") || strings.HasPrefix(c.Request.URL.Path, "/file/") {
+			c.Header("Cache-Control", "no-store")
+		}
+		c.Next()
+	}
+}
+
+func NewHTTPServer(host string, port int, webRoot string, authManager *auth.Manager, allowedOrigins, trustedProxies []string, handlers ...Handler) (*http.Server, error) {
+	if authManager == nil {
+		return nil, fmt.Errorf("authentication manager is required")
+	}
+	r := gin.New()
+	r.Use(gin.Logger(), gin.Recovery(), securityHeaders(allowedOrigins))
+	// Forwarded client addresses are trusted only from explicitly configured
+	// proxy addresses. The reverse proxy must strip client-supplied headers.
+	if err := r.SetTrustedProxies(trustedProxies); err != nil {
+		return nil, fmt.Errorf("disable implicit trusted proxies: %w", err)
+	}
+	if len(allowedOrigins) > 0 {
+		r.Use(cors.New(cors.Config{
+			AllowOrigins:     allowedOrigins,
+			AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-CSRF-Token"},
+			AllowCredentials: true,
+			MaxAge:           12 * time.Hour,
+		}))
+	}
+	authHandlers := &auth.Handlers{Manager: authManager}
+	r.POST("/auth/login", authHandlers.Login)
+	authGroup := r.Group("/auth", authHandlers.RequireSession())
+	authGroup.GET("/me", authHandlers.Me)
+	authGroup.POST("/logout", authHandlers.Logout)
+	authGroup.POST("/password", authHandlers.ChangePassword)
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	for _, handler := range handlers {
 		path, routes := handler.GetRouterGroups()
-		group := r.Group(path)
+		group := r.Group(path, authHandlers.RequireSession())
 		for route, fn := range routes {
 			parts := strings.Split(route, " ")
 			if len(parts) != 2 {
@@ -689,8 +732,11 @@ func NewHTTPServer(host string, port int, webRoot string, handlers ...Handler) (
 	if info, err := os.Stat(webRoot); err == nil && info.IsDir() {
 		root, absErr := filepath.Abs(webRoot)
 		if absErr == nil {
+			root, absErr = filepath.EvalSymlinks(root)
+		}
+		if absErr == nil {
 			indexPath := filepath.Join(root, "index.html")
-			if _, indexErr := os.Stat(indexPath); indexErr == nil {
+			if indexInfo, indexErr := os.Stat(indexPath); indexErr == nil && indexInfo.Mode().IsRegular() {
 				r.NoRoute(func(c *gin.Context) {
 					if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
 						c.Status(http.StatusNotFound)
@@ -699,9 +745,14 @@ func NewHTTPServer(host string, port int, webRoot string, handlers ...Handler) (
 					relative := strings.TrimPrefix(filepath.Clean("/"+c.Request.URL.Path), string(filepath.Separator))
 					if relative != "" && filepath.IsLocal(relative) {
 						candidate := filepath.Join(root, relative)
-						if fileInfo, statErr := os.Stat(candidate); statErr == nil && fileInfo.Mode().IsRegular() {
-							c.File(candidate)
-							return
+						resolved, resolveErr := filepath.EvalSymlinks(candidate)
+						if resolveErr == nil {
+							withinRoot, relErr := filepath.Rel(root, resolved)
+							fileInfo, statErr := os.Stat(resolved)
+							if relErr == nil && withinRoot != ".." && !strings.HasPrefix(withinRoot, ".."+string(filepath.Separator)) && statErr == nil && fileInfo.Mode().IsRegular() {
+								c.File(resolved)
+								return
+							}
 						}
 					}
 					c.File(indexPath)
@@ -714,6 +765,9 @@ func NewHTTPServer(host string, port int, webRoot string, handlers ...Handler) (
 		Addr:              net.JoinHostPort(host, strconv.Itoa(port)),
 		Handler:           r,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		WriteTimeout:      5 * time.Minute,
 		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}, nil
 }

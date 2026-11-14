@@ -3,6 +3,7 @@
   import ItemCard from './ItemCard.svelte';
   import EditModal from './EditModal.svelte';
   import { API_BASE_URL } from '../config';
+  import { apiFetch } from '../api';
 
   interface LibraryItem {
     Title: string;
@@ -66,7 +67,7 @@
 
     const url = `${API_BASE_URL}/data/search?${params.toString()}`;
 
-    const response = await fetch(url);
+    const response = await apiFetch(url);
 
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -198,7 +199,7 @@
 
   async function openItem(item: LibraryItem) {
     try {
-      const response = await fetch(`${API_BASE_URL}/file/download/${item.Uuid}`);
+      const response = await apiFetch(`${API_BASE_URL}/file/download/${item.Uuid}`);
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -215,7 +216,7 @@
     }
     converting = true;
     try {
-      const response = await fetch(`${API_BASE_URL}/file/convert/${item.Uuid}?format=pdf`);
+      const response = await apiFetch(`${API_BASE_URL}/file/convert/${item.Uuid}?format=pdf`, { method: 'POST' });
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.error || `Conversion failed (${response.status})`);
@@ -252,7 +253,7 @@
 
   async function downloadItem(item: LibraryItem) {
     try {
-      const response = await fetch(`${API_BASE_URL}/file/download/${item.Uuid}`);
+      const response = await apiFetch(`${API_BASE_URL}/file/download/${item.Uuid}`);
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -318,7 +319,7 @@
 
       const requestBody = { uuids: [item.Uuid] };
 
-      const response = await fetch(`${API_BASE_URL}/data/delete`, {
+      const response = await apiFetch(`${API_BASE_URL}/data/delete`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',

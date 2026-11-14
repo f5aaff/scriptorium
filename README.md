@@ -77,9 +77,9 @@ These are explicit remaining product milestones, not implied capabilities:
 4. Add full Dewey hierarchy and a richer classification workflow, including manual review queues.
 5. Add full-text indexing and search within document contents.
 6. Implement embedded PDF, EPUB, text, image, audio and video readers.
-7. Add authentication, user/session management and LAN access controls before treating the service as safe for untrusted networks.
-8. Add backup/restore, health checks, structured logging and graceful HTTP server shutdown.
-9. Add CI, reproducible builds, integration tests and release packaging.
+7. Add multi-user accounts, roles, sharing permissions and stronger account recovery.
+8. Add backup/restore, structured audit logging, monitoring and isolated conversion workers.
+9. Add CI, dependency vulnerability gates, reproducible builds, integration tests and release packaging.
 
 ## Prerequisites
 
@@ -107,14 +107,18 @@ The backend reads environment variables directly; it does not currently load `.e
 | `DB_PATH` | `./scriptorium.db` | BoltDB metadata database path (legacy persistence; migration to SQLite is planned) |
 | `DB_MODE` | `0600` | Database file permissions, in octal |
 | `STORAGE_PATH` | `./storage` | Root directory for original files and derivatives |
-| `REST_HOST` | `127.0.0.1` | API bind address; use `0.0.0.0` for LAN access |
+| `REST_HOST` | `127.0.0.1` | API bind address; keep private behind a reverse proxy |
 | `REST_PORT` | `8080` | API port |
 | `WEB_ROOT` | `./web` | Directory containing the built browser frontend |
-| `VITE_API_BASE_URL` | `http://localhost:8080` | API base URL used by the Svelte frontend |
+| `AUTH_FILE` | `./scriptorium-auth.json` | Owner credential file (mode 0600) |
+| `AUTH_USERNAME` / `AUTH_PASSWORD` | unset | First-run owner bootstrap only |
+| `COOKIE_SECURE` | `true` | Require Secure cookies |
+| `ALLOW_INSECURE_COOKIES` | `false` | Explicit local-development escape hatch |
+| `CORS_ALLOWED_ORIGINS` | unset | Exact origins for separately hosted clients |
+| `TRUSTED_PROXIES` | unset | Exact reverse-proxy IPs/CIDRs for client-IP derivation |
+| `VITE_API_BASE_URL` | same-origin in browser; localhost for Wails | API base URL embedded in the frontend build |
 
-**LAN security warning:** the current API does not authenticate users. Bind to loopback unless you are on a trusted private network and understand that anyone who can reach the API can read, upload, modify and delete library records. Do not expose it directly to the internet. Authentication and access control are release blockers for broader deployment.
-
-For LAN access, set `REST_HOST=0.0.0.0`, allow the chosen TCP port through the host firewall, and configure the frontend's `VITE_API_BASE_URL` to the backend's LAN address.
+**Security warning:** the API now requires an authenticated owner session, but it is not yet ready for public exposure. The application does not terminate TLS itself. For LAN and internet access, use an HTTPS reverse proxy, keep the Go listener private, and follow `SECURITY.md`. Direct HTTP access on a LAN is a development convenience, not the recommended deployment.
 
 ## Frontend development
 
@@ -124,7 +128,7 @@ npm install
 VITE_API_BASE_URL=http://127.0.0.1:8080 npm run dev -- --host 0.0.0.0
 ```
 
-For a production browser deployment, build the Svelte app and copy its output into the backend's configured web root:
+For a production browser deployment, build the Svelte app and copy its output into the backend's configured web root. The browser UI and API should share one HTTPS origin where possible:
 
 ```bash
 cd src/frontend/frontend
@@ -152,6 +156,15 @@ wails build
 
 ## API endpoints
 
+### Authentication — `/auth`
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/auth/login` | Authenticate and issue a session |
+| `GET` | `/auth/me` | Check the current session and retrieve the CSRF token |
+| `POST` | `/auth/logout` | Revoke the current session |
+| `POST` | `/auth/password` | Change the owner password and revoke all sessions |
+
 ### Library metadata — `/data`
 
 | Method | Path | Description |
@@ -171,23 +184,30 @@ wails build
 |---|---|---|
 | `POST` | `/file/upload` | Upload and catalogue any file up to 100 MiB |
 | `GET` | `/file/download/:uuid` | Download the original file |
-| `GET` | `/file/convert/:uuid` | Convert supported document formats with Pandoc |
+| `POST` | `/file/convert/:uuid` | Convert supported document formats with Pandoc |
 
-Example upload:
+All API routes other than `/healthz` and `/auth/login` require authentication.
+For scripts and API clients, use the 12-hour bearer token returned by login:
 
 ```bash
+TOKEN=$(curl -fsS http://127.0.0.1:8080/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"owner","password":"YOUR_PASSWORD"}' | jq -r .session_token)
+
 curl -X POST http://127.0.0.1:8080/file/upload \
+  -H "Authorization: Bearer $TOKEN" \
   -F 'file=@./research.customfmt' \
   -F 'metadata={"Title":"Research notes","Author":"Jane Doe"}'
-```
 
-Example classification request:
-
-```bash
 curl -X POST http://127.0.0.1:8080/data/classify \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"title":"Introduction to Go programming","content":"Software architecture and databases"}'
 ```
+
+Browser clients use HttpOnly cookies plus CSRF headers; the frontend handles
+this automatically. Bearer tokens are intended for trusted clients and should
+be kept in memory rather than persisted in browser storage.
 
 ## Testing
 
@@ -200,4 +220,48 @@ Tests use temporary directories and databases. The current suite includes storag
 
 ## Project status
 
-The current implementation is the first foundation pass, not a finished universal reader. Unknown files can be stored and catalogued, but format-specific extraction, content search, embedded rendering, browser production hosting, authentication and the SQLite migration remain outstanding.
+The current implementation remains an early foundation, not a finished universal reader. Unknown files can be stored and catalogued, and the backend has a browser-serving path, but format-specific extraction, full-text search, embedded rendering, SQLite migration, multi-user access control, backup/restore, and isolated conversion workers remain outstanding. Authentication is now implemented for a single owner account; see `SECURITY.md` for its limits.
+
+
+## Security and remote access
+
+See [SECURITY.md](SECURITY.md) for the threat model, implemented controls, residual risks, and a reverse-proxy deployment example.
+
+Scriptorium requires an owner account. On first startup, set `AUTH_USERNAME` and
+`AUTH_PASSWORD` (at least 12 characters). The credentials are bcrypt-hashed and
+stored in `AUTH_FILE`, which is created with owner-only permissions. The
+bootstrap environment variables are ignored once that file exists. Back up the
+authentication file alongside the database; losing it means the owner account
+must be recovered by stopping Scriptorium, preserving a backup, removing the authentication file, and restarting with new bootstrap credentials. This recovery requires filesystem access to the host.
+
+All library and file endpoints require an authenticated session. Sessions are
+held in memory, expire after 12 hours, and are invalidated on password change
+or server restart. Browser mutations require a CSRF token. Login attempts are
+rate-limited per source address. Password changes are available through
+`POST /auth/password` with `current_password` and `new_password` fields.
+
+### LAN and internet deployment
+
+The HTTP listener does not provide TLS. For use beyond a trusted local network,
+place it behind a maintained reverse proxy such as Caddy, nginx, or Traefik and
+terminate TLS there. Expose only the reverse proxy to the internet; keep the
+Scriptorium listener on a private interface or private container network. Use
+valid HTTPS certificates, restrict inbound firewall access, keep the host and
+proxy patched, and configure `COOKIE_SECURE=true` (the default). Do not set it
+to false outside local HTTP development. The application refuses that setting
+unless `ALLOW_INSECURE_COOKIES=true` is also explicitly set; this escape hatch
+should only be used on a trusted development machine.
+
+The browser UI should be served by the same origin as the API. The Wails client
+can use a 12-hour in-memory bearer session; browser clients use HttpOnly
+session cookies and CSRF protection. Cross-origin frontends require exact entries in `CORS_ALLOWED_ORIGINS`; wildcard origins are
+not supported. Do not trust arbitrary forwarded headers. If a reverse proxy is
+used, it must strip client-supplied forwarding headers and set its own. The
+application trusts no proxy addresses for client-IP derivation unless exact
+entries are configured in `TRUSTED_PROXIES`; never trust all addresses.
+
+This release has a single owner account, not multi-user accounts or role-based
+access control. It is a security baseline, not a claim of a completed internet
+security audit. Do not expose it publicly until TLS proxying, backups, restore,
+monitoring, dependency updates, and deployment-specific security checks have
+been completed.
