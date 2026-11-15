@@ -1,4 +1,4 @@
-# Scriptorium
+# ![fun text logo](res/scriptorium.png)
 
 Scriptorium is a local-first digital library intended to accept arbitrary files, catalogue them, organise them using Dewey Decimal Classification (DDC), and make their contents accessible through desktop and browser clients.
 
