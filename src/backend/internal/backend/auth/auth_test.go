@@ -102,3 +102,73 @@ func TestLoginRateLimit(t *testing.T) {
 		t.Fatalf("expected rate limit after five failures, got %v", err)
 	}
 }
+
+func TestMultipleUsersPersistPermissionsAndRevokeDisabledSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	manager, err := NewManager(path, "owner", "a-strong-test-password", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	permissions := Permissions{Upload: true}
+	if err := manager.CreateUser("reader", "another-strong-password", permissions); err != nil {
+		t.Fatal(err)
+	}
+
+	token, _, err := manager.Login("reader", "another-strong-password", "192.0.2.20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	user, ok := manager.SessionUser(request)
+	if !ok || user.Username != "reader" || user.Admin || !user.Permissions.Upload || user.Permissions.Edit || user.Permissions.Delete {
+		t.Fatalf("unexpected user or permissions: %#v, authenticated=%v", user, ok)
+	}
+	if err := manager.UpdateUser("reader", Permissions{}, true); err != nil {
+		t.Fatal(err)
+	}
+	if manager.Authenticated(request) {
+		t.Fatal("disabled user's existing session should be revoked")
+	}
+
+	reloaded, err := NewManager(path, "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	users := reloaded.ListUsers()
+	found := false
+	for _, candidate := range users {
+		if candidate.Username == "reader" {
+			found = true
+			if !candidate.Disabled || candidate.Permissions.Upload {
+				t.Fatalf("unexpected persisted account: %#v", candidate)
+			}
+		}
+		if candidate.PasswordHash != "" {
+			t.Fatal("password hashes must not be exposed by ListUsers")
+		}
+	}
+	if !found {
+		t.Fatal("expected reader account to persist")
+	}
+}
+
+func TestAdministratorRetainsFullPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	manager, err := NewManager(path, "owner", "a-strong-test-password", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.CreateUser("reader", "another-strong-password", Permissions{}); err != nil {
+		t.Fatal(err)
+	}
+	users := manager.ListUsers()
+	if len(users) != 2 {
+		t.Fatalf("expected two users, got %d", len(users))
+	}
+	for _, user := range users {
+		if user.Username == "owner" && (!user.Admin || !user.Permissions.Upload || !user.Permissions.Edit || !user.Permissions.Delete) {
+			t.Fatalf("owner did not retain administrator access: %#v", user)
+		}
+	}
+}

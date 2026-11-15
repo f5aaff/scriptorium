@@ -242,6 +242,49 @@ Browser clients use HttpOnly cookies plus CSRF headers; the frontend handles
 this automatically. Bearer tokens are intended for trusted clients and should
 be kept in memory rather than persisted in browser storage.
 
+### multi-user auth and permissions
+
+The backend supports multiple accounts against one shared Scriptorium catalogue.
+
+## Permissions
+
+- `upload`: `POST /file/upload`, `POST /file/imports/upload`, `POST /file/imports/directory`, `POST /file/convert/:uuid`, and `POST /data/create`.
+- `edit`: `PUT /data/update`.
+- `delete`: `DELETE /data/delete`.
+- Any authenticated account can browse, search, read, download, inspect import jobs, and use classification suggestions.
+- The bootstrap owner is an administrator and always retains all three permissions. Only an administrator can manage accounts.
+
+New accounts default to no write permissions unless permissions are supplied in the create request. This is a shared library; permissions are not per-document ownership rules.
+
+## Authentication response
+
+`POST /auth/login` and `GET /auth/me` now include a `user` object with `username`, `admin`, `disabled`, and `permissions` (`upload`, `edit`, `delete`). The login response still includes `session_token` and `csrf_token`, preserving the existing authentication contract.
+
+## Administrator endpoints
+
+All endpoints below require an authenticated administrator. Mutating requests must include the existing CSRF token when using cookie authentication; bearer-token requests retain the existing CSRF exemption.
+
+- `GET /auth/users` — returns `{ "users": [...] }`.
+- `POST /auth/users` — create an account with `username`, `password`, and `permissions`:
+
+```json
+{"username":"reader","password":"a-long-unique-password","permissions":{"upload":false,"edit":false,"delete":false}}
+```
+
+- `PUT /auth/users/:username` — update `permissions` and `disabled`:
+
+```json
+{"permissions":{"upload":true,"edit":false,"delete":false},"disabled":false}
+```
+
+Disabling an account immediately revokes its active sessions. Permission changes take effect on the next request. The administrator account cannot be disabled or have its full permissions removed.
+
+- `DELETE /auth/users/:username` — permanently remove an account. The last administrator cannot be deleted.
+
+## Storage and migration
+
+The existing `AUTH_FILE` remains the source of truth (default `./scriptorium-auth.json`). A legacy single-account file is migrated automatically: its existing account becomes the administrator, with all permissions enabled. Subsequent changes are persisted atomically in the same file with restrictive file permissions. The library database and stored documents are not modified by this migration.
+
 ## Testing
 
 ```bash

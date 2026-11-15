@@ -822,6 +822,16 @@ func securityHeaders(allowedOrigins []string) gin.HandlerFunc {
 	}
 }
 
+func chainHandler(middleware, handler gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+		handler(c)
+	}
+}
+
 func NewHTTPServer(host string, port int, webRoot string, authManager *auth.Manager, allowedOrigins, trustedProxies []string, handlers ...Handler) (*http.Server, error) {
 	if authManager == nil {
 		return nil, fmt.Errorf("authentication manager is required")
@@ -845,6 +855,11 @@ func NewHTTPServer(host string, port int, webRoot string, authManager *auth.Mana
 	authGroup.GET("/me", authHandlers.Me)
 	authGroup.POST("/logout", authHandlers.Logout)
 	authGroup.POST("/password", authHandlers.ChangePassword)
+	adminGroup := r.Group("/auth", authHandlers.RequireSession(), authHandlers.RequireAdmin())
+	adminGroup.GET("/users", authHandlers.ListUsers)
+	adminGroup.POST("/users", authHandlers.CreateUser)
+	adminGroup.PUT("/users/:username", authHandlers.UpdateUser)
+	adminGroup.DELETE("/users/:username", authHandlers.DeleteUser)
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	for _, handler := range handlers {
 		path, routes := handler.GetRouterGroups()
@@ -855,6 +870,20 @@ func NewHTTPServer(host string, port int, webRoot string, authManager *auth.Mana
 				return nil, fmt.Errorf("invalid route format: %s", route)
 			}
 			method, endpoint := parts[0], parts[1]
+			var permission string
+			switch {
+			case path == "/file" && method == http.MethodPost && (endpoint == "/upload" || endpoint == "/imports/upload" || endpoint == "/imports/directory" || strings.HasPrefix(endpoint, "/convert/")):
+				permission = "upload"
+			case path == "/data" && method == http.MethodPost && endpoint == "/create":
+				permission = "upload"
+			case path == "/data" && method == http.MethodPut && endpoint == "/update":
+				permission = "edit"
+			case path == "/data" && method == http.MethodDelete && endpoint == "/delete":
+				permission = "delete"
+			}
+			if permission != "" {
+				fn = chainHandler(authHandlers.RequirePermission(permission), fn)
+			}
 			switch method {
 			case http.MethodGet:
 				group.GET(endpoint, fn)
