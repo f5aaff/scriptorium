@@ -173,7 +173,7 @@ func TestSearchAllDocuments(t *testing.T) {
 	r, _, cleanup := setupTestRouter(t)
 	defer cleanup()
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		body := map[string]any{
 			"DocType": "Notes",
 			"Title":   "Doc",

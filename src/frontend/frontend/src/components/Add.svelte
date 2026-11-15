@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { API_BASE_URL } from '../config';
-  import { apiFetch } from '../api';
+  import { apiFetch, getSessionToken } from '../api';
 
   let selectedFile: File | null = null;
   let dragOver = false;
@@ -13,7 +13,20 @@
   let fileSize = '';
   let fileType = '';
   let previewUrl = '';
+  type IngestionJob = {
+    id: string;
+    status: 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed';
+    total: number;
+    processed: number;
+    failed: number;
+    error?: string;
+  };
 
+  let batchFiles: File[] = [];
+  let batchUploading = false;
+  let batchProgress = 0;
+  let batchJob: IngestionJob | null = null;
+  let batchError = '';
   let metadataTitle = '';
   let metadataAuthor = '';
   let metadataDocType = 'Notes';
@@ -23,6 +36,7 @@
 
   let docTypes: string[] = [];
   let deweyCategories: { code: string; name: string }[] = [];
+
 
   async function loadOptions() {
     try {
@@ -45,8 +59,8 @@
 
   function handleFileSelect(event: Event) {
     const target = event.target as HTMLInputElement;
-    if (target.files && target.files[0]) {
-      setFileInfo(target.files[0]);
+    if (target.files) {
+      setFiles(Array.from(target.files));
     }
   }
 
@@ -62,9 +76,50 @@
   function handleDrop(event: DragEvent) {
     event.preventDefault();
     dragOver = false;
-    if (event.dataTransfer && event.dataTransfer.files[0]) {
-      setFileInfo(event.dataTransfer.files[0]);
+
+    if (event.dataTransfer?.files.length) {
+      setFiles(Array.from(event.dataTransfer.files));
     }
+  }
+
+  function setFiles(files: File[]) {
+    if (files.length === 0) return;
+
+    uploadSuccess = false;
+    uploadError = '';
+    batchError = '';
+    batchJob = null;
+    batchProgress = 0;
+
+    if (files.length === 1) {
+      batchFiles = [];
+      setFileInfo(files[0]);
+      return;
+    }
+
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      previewUrl = '';
+    }
+
+    selectedFile = null;
+    fileName = '';
+    fileSize = '';
+    fileType = '';
+    batchFiles = files;
+  }
+
+  function openFileDialog() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.onchange = (event) => {
+      const target = event.target as HTMLInputElement;
+      if (target.files) {
+        setFiles(Array.from(target.files));
+      }
+    };
+    input.click();
   }
 
   function setFileInfo(file: File) {
@@ -91,19 +146,6 @@
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  }
-
-  function openFileDialog() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.multiple = false;
-    input.onchange = (event) => {
-      const target = event.target as HTMLInputElement;
-      if (target.files && target.files[0]) {
-        setFileInfo(target.files[0]);
-      }
-    };
-    input.click();
   }
 
   function validateForm(): string | null {
@@ -146,6 +188,12 @@
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${API_BASE_URL}/file/upload`, true);
 
+    const sessionToken = getSessionToken();
+
+    if (sessionToken) {
+      xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+    }
+
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {
         uploadProgress = (event.loaded / event.total) * 100;
@@ -177,6 +225,150 @@
     };
 
     xhr.send(formData);
+  }
+  function validateBatch(): string | null {
+    if (batchFiles.length === 0) return 'Please select files';
+    if (batchFiles.length > 1000) return 'A batch cannot contain more than 1,000 files';
+
+    const maxFileSize = 100 * 1024 * 1024;
+    const maxBatchSize = 1024 * 1024 * 1024;
+
+    let totalSize = 0;
+
+    for (const file of batchFiles) {
+      if (file.size === 0) {
+        return `${file.name} is empty`;
+      }
+
+      if (file.size > maxFileSize) {
+        return `${file.name} exceeds the 100 MiB per-file limit`;
+      }
+
+      totalSize += file.size;
+    }
+
+    if (totalSize > maxBatchSize) {
+      return 'The batch exceeds the 1 GiB total size limit';
+    }
+
+    return null;
+  }
+
+  function uploadBatchFiles(): Promise<IngestionJob> {
+    return new Promise((resolve, reject) => {
+      const formData = new FormData();
+
+      for (const file of batchFiles) {
+        formData.append('files', file, file.name);
+      }
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE_URL}/file/imports/upload`, true);
+
+      const sessionToken = getSessionToken();
+      if (sessionToken) {
+        xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+      }
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          batchProgress = (event.loaded / event.total) * 100;
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            reject(new Error(data.error || `Batch upload failed (${xhr.status})`));
+          } catch {
+            reject(new Error(`Batch upload failed (${xhr.status})`));
+          }
+          return;
+        }
+
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (!data.job?.id) {
+            reject(new Error('The server did not return an import job'));
+            return;
+          }
+          resolve(data.job as IngestionJob);
+        } catch {
+          reject(new Error('Invalid response from batch upload'));
+        }
+      };
+
+      xhr.onerror = () => {
+        reject(new Error('Network error - is the backend running?'));
+      };
+
+      xhr.send(formData);
+    });
+  }
+
+  async function pollBatchJob(jobId: string) {
+    while (true) {
+      const response = await apiFetch(
+        `${API_BASE_URL}/file/imports/jobs/${encodeURIComponent(jobId)}`
+      );
+
+      if (!response.ok) {
+        throw new Error(`Could not retrieve import job (${response.status})`);
+      }
+
+      const data = await response.json();
+      batchJob = data.job as IngestionJob;
+
+      if (
+        batchJob.status === 'completed' ||
+        batchJob.status === 'completed_with_errors' ||
+        batchJob.status === 'failed'
+      ) {
+        return;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  async function handleBatchUpload() {
+    const validationError = validateBatch();
+
+    if (validationError) {
+      batchError = validationError;
+      return;
+    }
+
+    batchUploading = true;
+    batchProgress = 0;
+    batchJob = null;
+    batchError = '';
+
+    try {
+      batchJob = await uploadBatchFiles();
+      batchProgress = 100;
+      await pollBatchJob(batchJob.id);
+    } catch (error) {
+      batchError = error instanceof Error ? error.message : 'Batch import failed';
+    } finally {
+      batchUploading = false;
+    }
+  }
+
+  function removeBatchFile(index: number) {
+    batchFiles = batchFiles.filter((_, i) => i !== index);
+    batchJob = null;
+    batchError = '';
+    batchProgress = 0;
+  }
+
+  function clearBatch() {
+    batchFiles = [];
+    batchJob = null;
+    batchError = '';
+    batchProgress = 0;
+    batchUploading = false;
   }
 
   function removeFile() {
@@ -215,12 +407,50 @@
     <div
       class="upload-area"
       class:drag-over={dragOver}
-      class:has-file={selectedFile}
+      class:has-file={selectedFile || batchFiles.length > 0}
       on:dragover={handleDragOver}
       on:dragleave={handleDragLeave}
       on:drop={handleDrop}
     >
-      {#if selectedFile}
+      {#if batchFiles.length > 0}
+        <div class="batch-preview-section">
+          <div class="batch-heading">
+            <div>
+              <h3 class="file-name">{batchFiles.length} files selected</h3>
+              <p class="file-meta">
+                {formatFileSize(batchFiles.reduce((total, file) => total + file.size, 0))} total
+              </p>
+            </div>
+            <button
+              class="remove-button"
+              on:click={clearBatch}
+              disabled={batchUploading}
+              aria-label="Clear batch"
+            >
+              Clear
+            </button>
+          </div>
+
+          <div class="batch-file-list">
+            {#each batchFiles as file, i}
+              <div class="batch-file-item">
+                <div class="file-details">
+                  <p class="file-name">{file.name}</p>
+                  <p class="file-meta">{formatFileSize(file.size)}</p>
+                </div>
+                <button
+                  class="remove-button"
+                  on:click={() => removeBatchFile(i)}
+                  disabled={batchUploading}
+                  aria-label={`Remove ${file.name}`}
+                >
+                  &times;
+                </button>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {:else if selectedFile}
         <div class="file-preview-section">
           {#if previewUrl}
             <div class="image-preview">
@@ -260,6 +490,81 @@
         </div>
       {/if}
     </div>
+
+    {#if batchFiles.length > 0}
+      <div class="upload-actions">
+        {#if batchError}
+          <div class="error-message">
+            <span>{batchError}</span>
+          </div>
+        {/if}
+
+        {#if batchJob}
+          <div class="batch-job-status">
+            <div class="batch-job-heading">
+              <strong>
+                {#if batchJob.status === 'completed'}
+                  Import completed
+                {:else if batchJob.status === 'completed_with_errors'}
+                  Import completed with errors
+                {:else if batchJob.status === 'failed'}
+                  Import failed
+                {:else if batchJob.status === 'queued'}
+                  Import queued
+                {:else}
+                  Importing files
+                {/if}
+              </strong>
+              <span>{batchJob.processed} / {batchJob.total}</span>
+            </div>
+
+            <div class="batch-progress-track">
+              <div
+                class="batch-progress-fill"
+                style={`width: ${batchJob.total > 0 ? (batchJob.processed / batchJob.total) * 100 : 0}%`}
+              ></div>
+            </div>
+
+            <p class="file-meta">
+              {batchJob.failed} failed
+              {#if batchJob.status === 'completed' || batchJob.status === 'completed_with_errors' || batchJob.status === 'failed'}
+                · Finished
+              {:else}
+                · Processing
+              {/if}
+            </p>
+
+            {#if batchJob.error}
+              <p class="batch-job-error">{batchJob.error}</p>
+            {/if}
+
+            {#if batchJob.status === 'completed' || batchJob.status === 'completed_with_errors' || batchJob.status === 'failed'}
+              <button class="link-button" on:click={clearBatch}>
+                Import another batch
+              </button>
+            {/if}
+          </div>
+        {:else if batchUploading}
+          <p class="file-meta">Uploading batch... {batchProgress.toFixed(0)}%</p>
+        {/if}
+
+        {#if !batchJob || (batchJob.status !== 'completed' && batchJob.status !== 'completed_with_errors' && batchJob.status !== 'failed')}
+          <button
+            class="upload-button"
+            class:uploading={batchUploading}
+            on:click={handleBatchUpload}
+            disabled={batchUploading}
+          >
+            {#if batchUploading}
+              <div class="spinner"></div>
+              <span>Importing...</span>
+            {:else}
+              <span>Import {batchFiles.length} files</span>
+            {/if}
+          </button>
+        {/if}
+      </div>
+    {/if}
 
     {#if selectedFile}
       <div class="metadata-section">
@@ -529,6 +834,90 @@
   .remove-button:hover {
     background: rgba(255, 255, 255, 0.1);
     color: #ffffff;
+  }
+
+  .batch-preview-section {
+    width: 100%;
+    text-align: left;
+  }
+
+  .batch-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .batch-file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
+  .batch-file-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+  }
+
+  .batch-file-item .file-name {
+    font-size: 14px;
+    overflow-wrap: anywhere;
+  }
+
+  .batch-file-item .file-meta {
+    font-size: 12px;
+  }
+
+  .batch-job-status {
+    margin-bottom: 16px;
+    padding: 16px;
+    background: rgba(44, 44, 46, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+  }
+
+  .batch-job-heading {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+    color: #ffffff;
+  }
+
+  .batch-progress-track {
+    height: 8px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    margin-bottom: 8px;
+  }
+
+  .batch-progress-fill {
+    height: 100%;
+    background: #007AFF;
+    border-radius: 8px;
+    transition: width 0.3s ease;
+  }
+
+  .batch-job-error {
+    color: #FF3B30;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+    margin: 10px 0;
+  }
+
+  .batch-file-item .remove-button:disabled,
+  .batch-heading .remove-button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   .metadata-section {

@@ -24,7 +24,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -712,6 +711,98 @@ func (h *APIHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 	return groupName, routes
 }
 
+func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
+	origins := make(map[string]struct{}, len(allowedOrigins))
+	for _, origin := range allowedOrigins {
+		origins[origin] = struct{}{}
+	}
+
+	allowedMethods := map[string]struct{}{
+		http.MethodGet:     {},
+		http.MethodPost:    {},
+		http.MethodPut:     {},
+		http.MethodDelete:  {},
+		http.MethodOptions: {},
+	}
+
+	allowedHeaders := map[string]struct{}{
+		"content-type":  {},
+		"accept":        {},
+		"authorization": {},
+		"x-csrf-token":  {},
+		"origin":        {},
+	}
+
+	return func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+
+		// Requests without an Origin header are not CORS requests.
+		if origin == "" {
+			c.Next()
+			return
+		}
+
+		// Always vary responses according to the request origin.
+		c.Header("Vary", "Origin")
+
+		if _, allowed := origins[origin]; !allowed {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+
+		c.Header("Access-Control-Allow-Origin", origin)
+		c.Header("Access-Control-Allow-Credentials", "true")
+
+		// Handle browser preflight requests before authentication and routing.
+		if c.Request.Method == http.MethodOptions &&
+			c.GetHeader("Access-Control-Request-Method") != "" {
+
+			c.Header("Vary", "Access-Control-Request-Method")
+			c.Header("Vary", "Access-Control-Request-Headers")
+
+			requestedMethod := strings.ToUpper(
+				c.GetHeader("Access-Control-Request-Method"),
+			)
+
+			if _, allowed := allowedMethods[requestedMethod]; !allowed {
+				c.AbortWithStatus(http.StatusForbidden)
+				return
+			}
+
+			requestedHeaders := strings.Split(
+				c.GetHeader("Access-Control-Request-Headers"), ",",
+			)
+
+			for _, header := range requestedHeaders {
+				header = strings.ToLower(strings.TrimSpace(header))
+				if header == "" {
+					continue
+				}
+
+				if _, allowed := allowedHeaders[header]; !allowed {
+					c.AbortWithStatus(http.StatusForbidden)
+					return
+				}
+			}
+
+			c.Header(
+				"Access-Control-Allow-Methods",
+				"GET, POST, PUT, DELETE, OPTIONS",
+			)
+			c.Header(
+				"Access-Control-Allow-Headers",
+				"Content-Type, Accept, Authorization, X-CSRF-Token",
+			)
+			c.Header("Access-Control-Max-Age", "43200")
+
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		c.Next()
+	}
+}
+
 func securityHeaders(allowedOrigins []string) gin.HandlerFunc {
 	connectSources := []string{"'self'"}
 	for _, origin := range allowedOrigins {
@@ -736,20 +827,17 @@ func NewHTTPServer(host string, port int, webRoot string, authManager *auth.Mana
 		return nil, fmt.Errorf("authentication manager is required")
 	}
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery(), securityHeaders(allowedOrigins))
+	r.Use(
+		gin.Logger(),
+		gin.Recovery(),
+		securityHeaders(allowedOrigins),
+		corsMiddleware(allowedOrigins),
+	)
+
 	// Forwarded client addresses are trusted only from explicitly configured
 	// proxy addresses. The reverse proxy must strip client-supplied headers.
 	if err := r.SetTrustedProxies(trustedProxies); err != nil {
 		return nil, fmt.Errorf("disable implicit trusted proxies: %w", err)
-	}
-	if len(allowedOrigins) > 0 {
-		r.Use(cors.New(cors.Config{
-			AllowOrigins:     allowedOrigins,
-			AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
-			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-CSRF-Token"},
-			AllowCredentials: true,
-			MaxAge:           12 * time.Hour,
-		}))
 	}
 	authHandlers := &auth.Handlers{Manager: authManager}
 	r.POST("/auth/login", authHandlers.Login)

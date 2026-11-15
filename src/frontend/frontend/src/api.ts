@@ -7,6 +7,10 @@ export function setCSRFToken(token: string) {
   csrfToken = token;
 }
 
+export function getSessionToken(): string {
+  return sessionToken;
+}
+
 export function setSessionToken(token: string) {
   sessionToken = token;
 }
