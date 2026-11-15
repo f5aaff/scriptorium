@@ -3,7 +3,9 @@
   import ItemCard from './ItemCard.svelte';
   import EditModal from './EditModal.svelte';
   import { API_BASE_URL } from '../config';
-  import { apiFetch } from '../api';
+  import { apiFetch, type UserPermissions } from '../api';
+
+  export let permissions: UserPermissions;
 
   interface LibraryItem {
     Title: string;
@@ -214,6 +216,7 @@
   }
 
   async function convertToPdf(item: LibraryItem) {
+    if (!permissions.upload) return;
     if (item.FileType === '.pdf') {
       await openItem(item);
       return;
@@ -236,6 +239,7 @@
   }
 
   function openEditModal(item: LibraryItem) {
+    if (!permissions.edit) return;
     editingItem = item;
   }
 
@@ -315,6 +319,7 @@
   }
 
   async function deleteItem(item: LibraryItem) {
+    if (!permissions.delete) return;
     try {
       if (!confirm(`Are you sure you want to delete "${item.Title}"? This action cannot be undone.`)) {
         return;
@@ -535,21 +540,54 @@
             </div>
           </div>
 
-          <div class="card-actions">
-            <button class="action-button primary" on:click={() => openItem(item)}>Open</button>
-            <button class="action-button accent" on:click={() => convertToPdf(item)} disabled={converting}>
-              {converting ? 'Converting...' : 'View as PDF'}
-            </button>
-            <button class="action-button" on:click={() => openEditModal(item)}>Edit</button>
-            <button class="action-button" on:click={() => downloadItem(item)}>Download</button>
-            <button class="action-button danger" on:click={() => deleteItem(item)}>Delete</button>
-          </div>
-        </div>
-      </section>
+
+
+
+
+
+
+
+
+
+
+
+<div class="card-actions">
+  <button class="action-button primary" on:click={() => openItem(item)}>
+    Open
+  </button>
+
+  {#if permissions.upload}
+    <button
+      class="action-button accent"
+      on:click={() => convertToPdf(item)}
+      disabled={converting}
+    >
+      {converting ? 'Converting...' : 'View as PDF'}
+    </button>
+  {/if}
+
+  {#if permissions.edit}
+    <button class="action-button" on:click={() => openEditModal(item)}>
+      Edit
+    </button>
+  {/if}
+
+  <button class="action-button" on:click={() => downloadItem(item)}>
+    Download
+  </button>
+
+  {#if permissions.delete}
+    <button class="action-button danger" on:click={() => deleteItem(item)}>
+      Delete
+    </button>
+  {/if}
+</div>
+</div>
+</section>
     </div>
   {/if}
 
-  {#if editingItem}
+  {#if editingItem && permissions.edit}
     <EditModal
       item={editingItem}
       onSave={handleEditSave}

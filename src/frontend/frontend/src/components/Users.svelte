@@ -9,7 +9,13 @@
     edit: boolean;
     delete: boolean;
   }
+type Permission = keyof Permissions;
 
+const permissionKeys: Permission[] = [
+  'upload',
+  'edit',
+  'delete'
+];
   interface User {
     username: string;
     admin: boolean;
@@ -192,7 +198,19 @@
       deletingUsers = next;
     }
   }
+function handlePermissionChange(
+  user: User,
+  permission: Permission,
+  event: Event
+) {
+  const input = event.currentTarget as HTMLInputElement;
+  void setPermission(user, permission, input.checked);
+}
 
+function handleStatusChange(user: User, event: Event) {
+  const input = event.currentTarget as HTMLInputElement;
+  void setDisabled(user, !input.checked);
+}
   onMount(loadUsers);
 </script>
 
@@ -312,23 +330,17 @@
                   {/if}
                 </th>
 
-                {#each ['upload', 'edit', 'delete'] as permission}
-                  <td>
-                    <input
-                      type="checkbox"
-                      aria-label={`${permission} permission for ${user.username}`}
-                      checked={user.permissions[permission as keyof Permissions]}
-                      disabled={user.admin || user.disabled || updatingUsers.has(user.username)}
-                      on:change={(event) =>
-                        setPermission(
-                          user,
-                          permission as keyof Permissions,
-                          event.currentTarget.checked
-                        )}
-                    />
-                  </td>
-                {/each}
-
+{#each permissionKeys as permission}
+  <td>
+    <input
+      type="checkbox"
+      aria-label={`${permission} permission for ${user.username}`}
+      checked={user.permissions[permission]}
+      disabled={user.admin || user.disabled || updatingUsers.has(user.username)}
+      on:change={(event) => handlePermissionChange(user, permission, event)}
+    />
+  </td>
+{/each}
                 <td>
                   <label class="status-control">
                     <input
@@ -336,8 +348,7 @@
                       checked={!user.disabled}
                       aria-label={`Account enabled for ${user.username}`}
                       disabled={user.admin || updatingUsers.has(user.username)}
-                      on:change={(event) =>
-                        setDisabled(user, !event.currentTarget.checked)}
+                      on:change={(event) => handleStatusChange(user,event)}
                     />
                     <span>{user.disabled ? 'Disabled' : 'Enabled'}</span>
                   </label>

@@ -34,11 +34,15 @@
 
     window.addEventListener('scriptorium:unauthorized', handleUnauthorized);
 
-    getCurrentUser().then((user) => {
-      currentUser = user;
-      authState = user ? 'signed-in' : 'signed-out';
-    });
-
+    getCurrentUser()
+      .then((user) => {
+        currentUser = user;
+        authState = user ? 'signed-in' : 'signed-out';
+      })
+      .catch(() => {
+        currentUser = null;
+        authState = 'signed-out';
+      });
     return () => {
       window.removeEventListener('scriptorium:unauthorized', handleUnauthorized);
     };
