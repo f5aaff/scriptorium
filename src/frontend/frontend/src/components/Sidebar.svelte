@@ -1,15 +1,18 @@
+
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  
+
   export let sidebarOpen: boolean = false;
   export let currentPage: string = 'library';
-  
+  export let canUpload: boolean = true;
+  export let isAdmin: boolean = false;
+
   const dispatch = createEventDispatcher();
-  
+
   function navigate(page: string) {
     dispatch('navigate', page);
   }
-  
+
   function toggle() {
     dispatch('toggle');
   }
@@ -25,10 +28,10 @@
       </svg>
     </button>
   </div>
-  
+
   <nav class="sidebar-nav">
-    <button 
-      class="nav-item" 
+    <button
+      class="nav-item"
       class:active={currentPage === 'library'}
       on:click={() => navigate('library')}
     >
@@ -38,23 +41,25 @@
       </svg>
       <span>Library</span>
     </button>
-    
-    <button 
-      class="nav-item" 
-      class:active={currentPage === 'add'}
-      on:click={() => navigate('add')}
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-        <polyline points="14,2 14,8 20,8"></polyline>
-        <line x1="12" y1="18" x2="12" y2="12"></line>
-        <line x1="9" y1="15" x2="15" y2="15"></line>
-      </svg>
-      <span>Add</span>
-    </button>
-    
-    <button 
-      class="nav-item" 
+
+    {#if canUpload}
+      <button
+        class="nav-item"
+        class:active={currentPage === 'add'}
+        on:click={() => navigate('add')}
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14,2 14,8 20,8"></polyline>
+          <line x1="12" y1="18" x2="12" y2="12"></line>
+          <line x1="9" y1="15" x2="15" y2="15"></line>
+        </svg>
+        <span>Add</span>
+      </button>
+    {/if}
+
+    <button
+      class="nav-item"
       class:active={currentPage === 'settings'}
       on:click={() => navigate('settings')}
     >
@@ -64,6 +69,22 @@
       </svg>
       <span>Settings</span>
     </button>
+
+    {#if isAdmin}
+      <button
+        class="nav-item"
+        class:active={currentPage === 'users'}
+        on:click={() => navigate('users')}
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+          <circle cx="10" cy="7" r="4"></circle>
+          <path d="M20 8v6"></path>
+          <path d="M23 11h-6"></path>
+        </svg>
+        <span>Users</span>
+      </button>
+    {/if}
   </nav>
 </div>
 
@@ -83,11 +104,11 @@
     z-index: 1000;
     overflow-y: auto;
   }
-  
+
   .sidebar.open {
     transform: translateX(0);
   }
-  
+
   .sidebar-header {
     display: flex;
     align-items: center;
@@ -95,14 +116,14 @@
     padding: 24px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   }
-  
+
   .app-title {
     font-size: 20px;
     font-weight: 700;
     color: #ffffff;
     margin: 0;
   }
-  
+
   .close-button {
     background: none;
     border: none;
@@ -112,15 +133,15 @@
     border-radius: 6px;
     transition: background-color 0.2s ease;
   }
-  
+
   .close-button:hover {
     background: rgba(255, 255, 255, 0.1);
   }
-  
+
   .sidebar-nav {
     padding: 16px 0;
   }
-  
+
   .nav-item {
     display: flex;
     align-items: center;
@@ -135,28 +156,29 @@
     font-size: 16px;
     font-weight: 500;
   }
-  
+
   .nav-item:hover {
     background: rgba(255, 255, 255, 0.1);
   }
-  
+
   .nav-item.active {
     background: rgba(0, 122, 255, 0.2);
     color: #007AFF;
   }
-  
+
   .nav-item svg {
     margin-right: 12px;
     flex-shrink: 0;
   }
-  
+
   .nav-item span {
     flex: 1;
   }
-  
+
   @media (max-width: 768px) {
     .sidebar {
       width: 100%;
     }
   }
-</style> 
+</style>
+
