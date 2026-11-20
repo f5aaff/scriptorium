@@ -73,6 +73,9 @@ jobs:
       - name: Check frontend
         run: make frontend-check
 
+      - name: Run frontend tests
+        run: cd src/frontend/frontend && npm test
+
       - name: Build all distributions
         run: make build
 

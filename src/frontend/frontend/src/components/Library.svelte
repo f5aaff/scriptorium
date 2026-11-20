@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { parseSearch, searchParams } from '../librarySearch';
   import ItemCard from './ItemCard.svelte';
   import EditModal from './EditModal.svelte';
   import { API_BASE_URL } from '../config';
@@ -59,17 +60,8 @@
     return error instanceof Error ? error.message : String(error);
   }
 
-  async function fetchItems(pageNum: number, searchKeyParam?: string, searchValueParam?: string, fuzzyQuery?: string): Promise<{ items: LibraryItem[], hasMore: boolean }> {
-    const params = new URLSearchParams();
-    params.append('page', pageNum.toString());
-    params.append('limit', '20');
-
-    if (fuzzyQuery) {
-      params.append('q', fuzzyQuery);
-    } else if (searchKeyParam && searchValueParam) {
-      params.append('key', searchKeyParam);
-      params.append('value', searchValueParam);
-    }
+  async function fetchItems(pageNum: number): Promise<{ items: LibraryItem[], hasMore: boolean }> {
+    const params = searchParams(parseSearch(searchQuery), pageNum);
 
     const url = `${API_BASE_URL}/data/search?${params.toString()}`;
 
@@ -95,34 +87,12 @@
 
     loading = true;
     try {
-      let key = '';
-      let value = '';
-      let fuzzy = '';
-
-      if (searchQuery.toLowerCase().startsWith('author:')) {
-        key = 'Author';
-        value = searchQuery.replace(/^author:\s*/i, '');
-      } else if (searchQuery.toLowerCase().startsWith('type:')) {
-        key = 'DocType';
-        value = searchQuery.replace(/^type:\s*/i, '');
-      } else if (searchQuery.toLowerCase().startsWith('filetype:')) {
-        key = 'FileType';
-        value = searchQuery.replace(/^filetype:\s*/i, '');
-      } else if (searchQuery.toLowerCase().startsWith('dewey:')) {
-        key = 'DeweyDecimal';
-        value = searchQuery.replace(/^dewey:\s*/i, '');
-      } else {
-        fuzzy = searchQuery;
-      }
-
-      const { items: searchResults, hasMore: hasMoreResults } = fuzzy
-        ? await fetchItems(1, undefined, undefined, fuzzy)
-        : await fetchItems(1, key, value);
+      const { items: searchResults, hasMore: hasMoreResults } = await fetchItems(1);
 
       items = searchResults;
       filteredItems = searchResults;
       hasMore = hasMoreResults;
-      page = 1;
+      page = 2;
     } catch (error) {
       console.error('Search failed:', error);
     } finally {
