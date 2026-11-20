@@ -42,6 +42,17 @@
       <span>Library</span>
     </button>
 
+    <button
+      class="nav-item"
+      class:active={currentPage === 'imports'}
+      on:click={() => navigate('imports')}
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"></path>
+      </svg>
+      <span>Imports</span>
+    </button>
+
     {#if canUpload}
       <button
         class="nav-item"

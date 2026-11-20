@@ -5,6 +5,7 @@
   import Settings from './components/Settings.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import Users from './components/Users.svelte';
+  import Imports from './components/Imports.svelte';
   import { API_BASE_URL } from './config';
   import {
     apiFetch,
@@ -15,6 +16,8 @@
   } from './api';
 
   let currentPage = 'library';
+  let selectedImportID = '';
+  let libraryDocumentID = '';
   let sidebarOpen = false;
   let authState: 'checking' | 'signed-out' | 'signed-in' = 'checking';
   let currentUser: AuthUser | null = null;
@@ -116,8 +119,19 @@
     if (page === 'add' && !currentUser.permissions.upload) return;
     if (page === 'users' && !currentUser.admin) return;
 
+    libraryDocumentID = '';
     currentPage = page;
     sidebarOpen = false;
+  }
+
+  function openImport(id: string) {
+    selectedImportID = id;
+    navigateTo('imports');
+  }
+
+  function openImportedDocument(id: string) {
+    navigateTo('library');
+    libraryDocumentID = id;
   }
 </script>
 
@@ -196,9 +210,11 @@
 
       <div class="page-content">
         {#if currentPage === 'library'}
-          <Library permissions={currentUser.permissions} />
+          <Library permissions={currentUser.permissions} initialDocumentID={libraryDocumentID} />
         {:else if currentPage === 'add' && currentUser.permissions.upload}
-          <Add />
+          <Add on:openImport={({ detail }) => openImport(detail)} />
+        {:else if currentPage === 'imports'}
+          <Imports initialJobID={selectedImportID} on:openDocument={({ detail }) => openImportedDocument(detail)} />
         {:else if currentPage === 'settings'}
           <Settings />
         {:else if currentPage === 'users' && currentUser.admin}

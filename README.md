@@ -48,7 +48,9 @@ src/
 - SHA-256 duplicate detection avoids storing the same upload twice; concurrent duplicates are protected by a transactional content-hash registry.
 - Plain text, Markdown, CSV, logs and reStructuredText have bounded UTF-8 text extraction (up to 1 MiB per item); extraction status distinguishes complete, truncated, failed and unsupported formats.
 - Catalogue writes roll back the stored original if persistence fails.
-- Background batch jobs are persisted in SQLite, report per-file progress, and recover after process restarts. Replayed files are safe because content hashes prevent duplicate catalogue entries.
+- Background batch jobs are persisted in SQLite and recover after process restarts. Committed per-file outcomes are retained; files whose outcome was not committed may be replayed safely because content hashes prevent duplicate catalogue entries.
+- The **Imports** screen lists the latest 25 jobs for the shared library, automatically updates active jobs, and shows per-file imported/duplicate/failed outcomes. Successful and duplicate files link to their catalogue records.
+- Batch uploads link directly to their import details. Any authenticated user can inspect import history, including read-only accounts. File-result details are available for newly processed jobs; older completed jobs retain their existing aggregate progress only.
 - Directory imports are available only below administrator-configured `IMPORT_ROOTS`; the API accepts a root ID and relative path, never an arbitrary server filesystem path. Symlink entries inside imported trees are skipped.
 - Batch source files are staged below `STORAGE_PATH/.jobs` with restrictive permissions before the job is committed to the queue.
 
@@ -88,7 +90,7 @@ src/
 
 These are explicit remaining product milestones, not implied capabilities:
 
-1. Automatic watch-folder monitoring and user-facing import-job progress UI.
+1. Automatic watch-folder monitoring, import cancellation/retry controls, and a configured-directory import UI.
 2. Format-specific metadata and text extraction for PDF, EPUB, Office and other binary document formats.
 3. Full Dewey schedules and a richer classification workflow, including review queues and user overrides in the UI.
 4. Embedded PDF, EPUB, text, image, audio and video readers.
@@ -216,12 +218,21 @@ wails build
 |---|---|---|
 | `POST` | `/file/upload` | Upload and catalogue one file synchronously (100 MiB maximum) |
 | `POST` | `/file/imports/upload` | Queue multipart files (`files` field; `file` also accepted) for background import (1,000 files / 1 GiB per batch) |
-| `GET` | `/file/imports/jobs` | List the latest 25 import jobs and their progress |
-| `GET` | `/file/imports/jobs/:id` | Retrieve one import job |
+| `GET` | `/file/imports/jobs` | List the latest 25 import-job summaries (without per-file results) |
+| `GET` | `/file/imports/jobs/:id` | Retrieve one import job, including its persisted file results |
 | `GET` | `/file/imports/roots` | List configured import-root IDs and display names |
 | `POST` | `/file/imports/directory` | Queue a directory/file import using `{ "root_id": "…", "path": "relative/path" }` |
 | `GET` | `/file/download/:uuid` | Download the original file |
 | `POST` | `/file/convert/:uuid` | Convert supported document formats with Pandoc |
+
+Job details include a `results` array when per-file outcomes are available. Each
+entry contains `filename`, `status` (`imported`, `duplicate`, or `failed`), and
+optionally `document_id` or a public `error`. Results are in source order and
+cover processed files only; staged server paths are never included. A duplicate
+links to the existing catalogue record, rather than creating another record.
+The UI polls while jobs are active; use **Refresh imports** to discover newly
+submitted jobs once all displayed jobs have finished. Failed files must currently
+be uploaded again; retry/cancel job actions are not implemented.
 
 All API routes other than `/healthz` and `/auth/login` require authentication.
 For scripts and API clients, use the 12-hour bearer token returned by login:

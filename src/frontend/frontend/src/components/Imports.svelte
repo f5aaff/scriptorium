@@ -31,7 +31,10 @@
     detailError = '';
     try {
       const job = await getImportJob(id, request.signal);
-      if (!disposed && detailRequest === request) selected = job;
+      if (!disposed && detailRequest === request) {
+        selected = job;
+        return job;
+      }
     } catch (failure) {
       if (!disposed && detailRequest === request) detailError = message(failure);
     } finally {
@@ -42,11 +45,16 @@
   async function selectJob(id: string) {
     selectedID = id;
     selected = null;
-    await loadDetail(id);
+    const job = await loadDetail(id);
+    if (!disposed && selectedID === id && job && isActiveImport(job) && !loading) {
+      clearTimeout(timer);
+      timer = setTimeout(() => { void refresh(); }, 2000);
+    }
   }
 
   async function refresh() {
     clearTimeout(timer);
+    timer = undefined;
     listRequest?.abort();
     const request = new AbortController();
     listRequest = request;

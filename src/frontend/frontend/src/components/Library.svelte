@@ -7,6 +7,25 @@
   import { apiFetch, type UserPermissions } from '../api';
 
   export let permissions: UserPermissions;
+  export let initialDocumentID = '';
+  let documentError = '';
+  const documentRequest = new AbortController();
+
+  async function openInitialDocument() {
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/data/read/${encodeURIComponent(initialDocumentID)}`, {
+        signal: documentRequest.signal
+      });
+      if (!response.ok) throw new Error('Document unavailable');
+      const data = await response.json();
+      const item: LibraryItem = JSON.parse(data.value);
+      if (!documentRequest.signal.aborted) selectItem(item);
+    } catch {
+      if (!documentRequest.signal.aborted) {
+        documentError = 'Could not open the imported document. It may have been deleted.';
+      }
+    }
+  }
 
   interface LibraryItem {
     Title: string;
@@ -275,7 +294,11 @@
 
   onMount(() => {
     search.setQuery(searchQuery);
-    return () => search.dispose();
+    if (initialDocumentID) void openInitialDocument();
+    return () => {
+      search.dispose();
+      documentRequest.abort();
+    };
   });
 </script>
 
@@ -321,6 +344,9 @@
 
   <!-- Gallery with adjusted top margin for search bar -->
   <div class="gallery" on:scroll={handleScroll} aria-busy={loading}>
+    {#if documentError}
+      <div class="empty-state" role="alert"><p>{documentError}</p></div>
+    {/if}
     <div class="grid">
       {#each filteredItems as item (item.Uuid)}
         <ItemCard {item} onSelect={selectItem} />

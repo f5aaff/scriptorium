@@ -1,7 +1,16 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+  import type { ImportJob as IngestionJob } from '../imports';
   import { API_BASE_URL } from '../config';
   import { apiFetch, getSessionToken } from '../api';
+
+  const dispatch = createEventDispatcher<{ openImport: string }>();
+  const batchPollController = new AbortController();
+  let stopBatchDelay: (() => void) | undefined;
+  onDestroy(() => {
+    batchPollController.abort();
+    stopBatchDelay?.();
+  });
 
   let selectedFile: File | null = null;
   let dragOver = false;
@@ -13,15 +22,6 @@
   let fileSize = '';
   let fileType = '';
   let previewUrl = '';
-  type IngestionJob = {
-    id: string;
-    status: 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed';
-    total: number;
-    processed: number;
-    failed: number;
-    error?: string;
-  };
-
   let batchFiles: File[] = [];
   let batchUploading = false;
   let batchProgress = 0;
@@ -308,9 +308,10 @@
   }
 
   async function pollBatchJob(jobId: string) {
-    while (true) {
+    while (!batchPollController.signal.aborted) {
       const response = await apiFetch(
-        `${API_BASE_URL}/file/imports/jobs/${encodeURIComponent(jobId)}`
+        `${API_BASE_URL}/file/imports/jobs/${encodeURIComponent(jobId)}`,
+        { signal: batchPollController.signal }
       );
 
       if (!response.ok) {
@@ -318,6 +319,7 @@
       }
 
       const data = await response.json();
+      if (batchPollController.signal.aborted) return;
       batchJob = data.job as IngestionJob;
 
       if (
@@ -328,7 +330,17 @@
         return;
       }
 
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Resolve the delay on navigation too, so no polling task is left behind.
+      await new Promise<void>(resolve => {
+        const timer = setTimeout(() => {
+          stopBatchDelay = undefined;
+          resolve();
+        }, 1000);
+        stopBatchDelay = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
     }
   }
 
@@ -350,7 +362,9 @@
       batchProgress = 100;
       await pollBatchJob(batchJob.id);
     } catch (error) {
-      batchError = error instanceof Error ? error.message : 'Batch import failed';
+      if (!batchPollController.signal.aborted) {
+        batchError = error instanceof Error ? error.message : 'Batch import failed';
+      }
     } finally {
       batchUploading = false;
     }
@@ -500,6 +514,9 @@
         {/if}
 
         {#if batchJob}
+          <button type="button" class="browse-button" on:click={() => dispatch('openImport', batchJob?.id || '')}>
+            View import details
+          </button>
           <div class="batch-job-status">
             <div class="batch-job-heading">
               <strong>

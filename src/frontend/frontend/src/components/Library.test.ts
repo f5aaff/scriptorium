@@ -15,6 +15,27 @@ const item = (id: string) => ({ Uuid: id, Title: id, FileType: '.txt' });
 beforeEach(() => vi.mocked(apiFetch).mockReset());
 afterEach(() => cleanup());
 
+describe('imported document links', () => {
+  it('reports a deleted record without breaking library browsing', async () => {
+    vi.mocked(apiFetch).mockImplementation(async input => String(input).includes('/data/read/')
+      ? new Response('', { status: 400 })
+      : response([item('Available document')]));
+    render(Library, { permissions, initialDocumentID: 'deleted-id' });
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getByText(/Could not open the imported document/)).toBeTruthy();
+    expect(await screen.findByText('Available document')).toBeTruthy();
+  });
+
+  it('aborts a linked document request on navigation', async () => {
+    vi.mocked(apiFetch).mockImplementation(async input => String(input).includes('/data/read/')
+      ? new Promise<Response>(() => {}) : response());
+    const { unmount } = render(Library, { permissions, initialDocumentID: 'pending-id' });
+    const request = vi.mocked(apiFetch).mock.calls.find(([url]) => String(url).includes('/data/read/'));
+    unmount();
+    expect(request?.[1]?.signal?.aborted).toBe(true);
+  });
+});
+
 describe('library search feedback', () => {
   it('shows loading before a successfully empty library', async () => {
     let resolve!: (value: Response) => void;

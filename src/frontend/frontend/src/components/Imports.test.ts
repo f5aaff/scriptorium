@@ -83,6 +83,19 @@ describe('Imports', () => {
     expect(listImportJobs).toHaveBeenCalledTimes(2);
   });
 
+  it('starts polling when selected details reveal an active job', async () => {
+    vi.useFakeTimers();
+    vi.mocked(listImportJobs).mockResolvedValue([job('completed')]);
+    vi.mocked(getImportJob).mockResolvedValue(job('running'));
+    render(Imports);
+    await act(async () => {});
+    await fireEvent.click(screen.getByRole('button', { name: /Import job-1/ }));
+    await act(async () => {});
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(listImportJobs).toHaveBeenCalledTimes(2);
+    expect(getImportJob).toHaveBeenCalledTimes(2);
+  });
+
   it('aborts requests and stops polling when removed', async () => {
     vi.useFakeTimers();
     vi.mocked(listImportJobs).mockResolvedValue([job('running')]);
