@@ -100,7 +100,7 @@ These are explicit remaining product milestones, not implied capabilities:
 
 - Go 1.23 or later.
 - CGO enabled and a working C compiler (GCC or Clang; Xcode Command Line Tools on macOS).
-- Node.js 18 or later and npm.
+- Node.js 20.19+ or 22.12+ (a supported LTS release is recommended) and npm.
 - Pandoc is optional and only needed for document conversions that Pandoc supports.
 - Wails v2 CLI for the desktop build.
 
@@ -156,6 +156,21 @@ cp -a dist/. ../../backend/web/
 ```
 
 Then run the backend from `src/backend`. Browse to `http://<server-address>:8080`. The API and browser UI will share the same origin. For development, the Vite server remains available separately.
+
+### Frontend tests
+
+```bash
+cd src/frontend/frontend
+npm ci
+npm test
+npm run check
+npm run build
+```
+
+Vitest runs query/pagination unit tests and Svelte component tests in jsdom.
+Search tests cover field filters across pages, stale responses, debounce and
+navigation cleanup, retrying failed pages, and loading/error/empty states.
+CI runs these tests alongside the backend tests and frontend checks.
 
 ## Desktop development
 

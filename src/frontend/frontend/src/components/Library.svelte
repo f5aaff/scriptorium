@@ -289,7 +289,8 @@
       </svg>
       <input
         type="text"
-        placeholder="Search... (or use author:, type:, dewey: prefixes)"
+        aria-label="Search library"
+        placeholder="Search... (or use author:, type:, filetype:, dewey: prefixes)"
         value={searchQuery}
         on:input={handleSearchInput}
         on:focus={() => searchFocused = true}
@@ -297,7 +298,7 @@
         class="search-input"
       />
       {#if searchQuery}
-        <button class="clear-button" on:click={clearSearch}>
+        <button class="clear-button" aria-label="Clear search" on:click={clearSearch}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -306,10 +307,10 @@
       {/if}
     </div>
 
-    {#if searchQuery}
-      <div class="search-results-info">
+    {#if searchQuery.trim() && searchLoaded && !loading && !searchError}
+      <div class="search-results-info" role="status">
         <span class="results-count">
-          {filteredItems.length} {filteredItems.length === 1 ? 'item' : 'items'} found
+          {filteredItems.length} {filteredItems.length === 1 ? 'item' : 'items'} loaded
         </span>
         {#if filteredItems.length === 0}
           <span class="no-results">No items match your search</span>
@@ -319,7 +320,7 @@
   </div>
 
   <!-- Gallery with adjusted top margin for search bar -->
-  <div class="gallery" on:scroll={handleScroll}>
+  <div class="gallery" on:scroll={handleScroll} aria-busy={loading}>
     <div class="grid">
       {#each filteredItems as item (item.Uuid)}
         <ItemCard {item} onSelect={selectItem} />
@@ -327,13 +328,21 @@
     </div>
 
     {#if loading}
-      <div class="loading">
-        <div class="spinner"></div>
-        <p>Loading more items...</p>
+      <div class="loading" role="status">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>{filteredItems.length ? 'Loading more items...' : 'Loading library...'}</p>
       </div>
     {/if}
 
-    {#if searchQuery && filteredItems.length === 0 && !loading}
+    {#if searchError}
+      <div class="empty-state" role="alert">
+        <h3>Unable to load {filteredItems.length ? 'more items' : 'the library'}</h3>
+        <p>{searchError}</p>
+        <button class="clear-search-button" on:click={loadMoreItems}>Retry</button>
+      </div>
+    {/if}
+
+    {#if searchLoaded && searchQuery.trim() && filteredItems.length === 0 && !loading && !searchError}
       <div class="empty-state">
         <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
           <circle cx="11" cy="11" r="8"></circle>
@@ -344,6 +353,13 @@
         <button class="clear-search-button" on:click={clearSearch}>
           Clear Search
         </button>
+      </div>
+    {/if}
+
+    {#if searchLoaded && !searchQuery.trim() && filteredItems.length === 0 && !loading && !searchError}
+      <div class="empty-state" role="status">
+        <h3>Your library is empty</h3>
+        <p>{permissions.upload ? 'Add your first file to get started.' : 'No documents have been added yet.'}</p>
       </div>
     {/if}
   </div>
