@@ -418,23 +418,31 @@ func (m *JobManager) worker(ctx context.Context) {
 }
 func (m *JobManager) process(ctx context.Context, job dao.IngestionJob) {
 	var items []jobItem
-	if err := json.Unmarshal(job.Payload, &items); err != nil || len(items) == 0 || len(items) != job.Total {
+	if err := json.Unmarshal(job.Payload, &items); err != nil || len(items) == 0 || len(items) != job.Total || len(job.Results) > len(items) {
 		job.Status = "failed"
 		job.Error = "invalid persisted job payload"
 		job.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		_ = m.repository.UpdateIngestionJob(job)
 		return
 	}
-	job.Processed = 0
+	// Results and counters are committed together. Resume after that durable prefix
+	// so restarts preserve original imported/duplicate outcomes for completed files.
+	job.Processed = len(job.Results)
 	job.Failed = 0
 	job.Error = ""
-	for _, item := range items {
+	for _, result := range job.Results {
+		if result.Status == "failed" {
+			job.Failed++
+		}
+	}
+	for _, item := range items[len(job.Results):] {
 		if ctx.Err() != nil {
 			return
 		}
+		var imported Result
 		file, err := os.Open(item.Path)
 		if err == nil {
-			_, err = m.ingestor.Import(ctx, Request{Filename: item.Filename, Metadata: item.Metadata}, file)
+			imported, err = m.ingestor.Import(ctx, Request{Filename: item.Filename, Metadata: item.Metadata}, file)
 			_ = file.Close()
 		}
 		// A cancelled import is not a completed failure: leave the job running
@@ -443,16 +451,26 @@ func (m *JobManager) process(ctx context.Context, job dao.IngestionJob) {
 			return
 		}
 		job.Processed++
+		result := dao.ImportFileResult{Filename: item.Filename, Status: "imported", DocumentID: imported.Metadata.Uuid}
+		if imported.Duplicate {
+			result.Status = "duplicate"
+		}
 		if err != nil {
+			// Storage and extractor errors can contain private server paths. Keep
+			// public outcomes generic rather than exposing the underlying error.
+			result.Status = "failed"
+			result.DocumentID = ""
+			result.Error = "File could not be imported. Verify the source and try uploading it again."
 			job.Failed++
 			if job.Error != "" {
 				job.Error += "; "
 			}
-			job.Error += fmt.Sprintf("%s: %v", item.Filename, err)
+			job.Error += fmt.Sprintf("%s: %s", item.Filename, result.Error)
 			if len(job.Error) > 4096 {
 				job.Error = job.Error[:4096]
 			}
 		}
+		job.Results = append(job.Results, result)
 		if job.Processed == job.Total {
 			job.Status = "completed"
 			if job.Failed > 0 {

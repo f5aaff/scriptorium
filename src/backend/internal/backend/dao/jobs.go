@@ -12,20 +12,30 @@ var ErrJobQueueFull = errors.New("ingestion queue is full")
 
 const MaxActiveIngestionJobs = 10
 
+// ImportFileResult is a durable, public outcome for one file in a batch.
+// It contains no staging paths or private ingestion metadata.
+type ImportFileResult struct {
+	Filename   string `json:"filename"`
+	Status     string `json:"status"` // imported, duplicate, or failed
+	DocumentID string `json:"document_id,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
 // IngestionJob is durable queue state. Payload is private application data and
 // must never be returned directly by HTTP handlers.
 type IngestionJob struct {
-	ID         string          `json:"id"`
-	Status     string          `json:"status"`
-	Payload    json.RawMessage `json:"-"`
-	Total      int             `json:"total"`
-	Processed  int             `json:"processed"`
-	Failed     int             `json:"failed"`
-	Error      string          `json:"error,omitempty"`
-	CreatedAt  string          `json:"created_at"`
-	UpdatedAt  string          `json:"updated_at"`
-	StartedAt  string          `json:"started_at,omitempty"`
-	FinishedAt string          `json:"finished_at,omitempty"`
+	ID         string             `json:"id"`
+	Status     string             `json:"status"`
+	Payload    json.RawMessage    `json:"-"`
+	Total      int                `json:"total"`
+	Processed  int                `json:"processed"`
+	Failed     int                `json:"failed"`
+	Error      string             `json:"error,omitempty"`
+	CreatedAt  string             `json:"created_at"`
+	UpdatedAt  string             `json:"updated_at"`
+	StartedAt  string             `json:"started_at,omitempty"`
+	FinishedAt string             `json:"finished_at,omitempty"`
+	Results    []ImportFileResult `json:"results,omitempty"`
 }
 
 func (s *SQLiteDAO) CreateIngestionJob(job IngestionJob) error {
@@ -72,9 +82,11 @@ func (s *SQLiteDAO) GetIngestionJob(id string) (IngestionJob, error) {
 	if err := s.ready(); err != nil {
 		return IngestionJob{}, err
 	}
-	return scanIngestionJob(s.db.QueryRow(`SELECT id,status,payload_json,total,processed,failed,error,created_at,updated_at,started_at,finished_at FROM ingestion_jobs WHERE id=?`, id))
+	return scanIngestionJob(s.db.QueryRow(`SELECT id,status,payload_json,total,processed,failed,error,created_at,updated_at,started_at,finished_at,results_json FROM ingestion_jobs WHERE id=?`, id))
 }
 
+// ListIngestionJobs returns recent job summaries without potentially large file results.
+// GetIngestionJob returns the full results for an individual job.
 func (s *SQLiteDAO) ListIngestionJobs(limit int) ([]IngestionJob, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
@@ -82,7 +94,7 @@ func (s *SQLiteDAO) ListIngestionJobs(limit int) ([]IngestionJob, error) {
 	if limit < 1 || limit > 100 {
 		limit = 25
 	}
-	rows, err := s.db.Query(`SELECT id,status,payload_json,total,processed,failed,error,created_at,updated_at,started_at,finished_at FROM ingestion_jobs ORDER BY created_at DESC LIMIT ?`, limit)
+	rows, err := s.db.Query(`SELECT id,status,payload_json,total,processed,failed,error,created_at,updated_at,started_at,finished_at,'[]' FROM ingestion_jobs ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list ingestion jobs: %w", err)
 	}
@@ -126,12 +138,17 @@ func (s *SQLiteDAO) ClaimIngestionJob() (IngestionJob, bool, error) {
 	return job, err == nil, err
 }
 
+// UpdateIngestionJob atomically saves progress and the corresponding file outcomes.
 func (s *SQLiteDAO) UpdateIngestionJob(job IngestionJob) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := s.db.Exec(`UPDATE ingestion_jobs SET status=?,processed=?,failed=?,error=?,updated_at=?,finished_at=? WHERE id=?`, job.Status, job.Processed, job.Failed, job.Error, now, job.FinishedAt, job.ID)
+	results, err := json.Marshal(job.Results)
+	if err != nil {
+		return fmt.Errorf("encode ingestion results: %w", err)
+	}
+	result, err := s.db.Exec(`UPDATE ingestion_jobs SET status=?,processed=?,failed=?,error=?,updated_at=?,finished_at=?,results_json=? WHERE id=?`, job.Status, job.Processed, job.Failed, job.Error, now, job.FinishedAt, string(results), job.ID)
 	if err != nil {
 		return fmt.Errorf("update ingestion job: %w", err)
 	}
@@ -141,14 +158,14 @@ func (s *SQLiteDAO) UpdateIngestionJob(job IngestionJob) error {
 	return nil
 }
 
-// RecoverIngestionJobs makes interrupted work eligible for retry. Import is
-// idempotent because the content hash is the final duplicate arbiter.
+// RecoverIngestionJobs requeues interrupted work while retaining committed outcomes.
+// Uncommitted imports can be replayed safely because content hashes prevent duplicates.
 func (s *SQLiteDAO) RecoverIngestionJobs() error {
 	if err := s.ready(); err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.Exec(`UPDATE ingestion_jobs SET status='queued', processed=0, failed=0, error='recovered after an interrupted server run', updated_at=? WHERE status='running'`, now)
+	_, err := s.db.Exec(`UPDATE ingestion_jobs SET status='queued', error='recovered after an interrupted server run', updated_at=? WHERE status='running'`, now)
 	return err
 }
 
@@ -156,13 +173,16 @@ type rowScanner interface{ Scan(...any) error }
 
 func scanIngestionJob(row rowScanner) (IngestionJob, error) {
 	var job IngestionJob
-	var payload string
-	err := row.Scan(&job.ID, &job.Status, &payload, &job.Total, &job.Processed, &job.Failed, &job.Error, &job.CreatedAt, &job.UpdatedAt, &job.StartedAt, &job.FinishedAt)
+	var payload, results string
+	err := row.Scan(&job.ID, &job.Status, &payload, &job.Total, &job.Processed, &job.Failed, &job.Error, &job.CreatedAt, &job.UpdatedAt, &job.StartedAt, &job.FinishedAt, &results)
 	if errors.Is(err, sql.ErrNoRows) {
 		return IngestionJob{}, fmt.Errorf("ingestion job not found")
 	}
 	if err != nil {
 		return IngestionJob{}, fmt.Errorf("read ingestion job: %w", err)
+	}
+	if err := json.Unmarshal([]byte(results), &job.Results); err != nil {
+		return IngestionJob{}, fmt.Errorf("decode ingestion results: %w", err)
 	}
 	job.Payload = json.RawMessage(payload)
 	return job, nil

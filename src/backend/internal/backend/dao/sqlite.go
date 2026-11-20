@@ -134,6 +134,12 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, CURRENT_
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_documents_sha256 ON documents(sha256); INSERT OR IGNORE INTO content_hashes(sha256, document_id) SELECT sha256, MIN(id) FROM documents WHERE sha256 <> '' GROUP BY sha256; INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, CURRENT_TIMESTAMP); INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, CURRENT_TIMESTAMP);`); err != nil {
 		return fmt.Errorf("apply SQLite schema migration 2: %w", err)
 	}
+	if err := ensureSQLiteColumn(db, "ingestion_jobs", "results_json", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, CURRENT_TIMESTAMP)`); err != nil {
+		return fmt.Errorf("record SQLite schema migration 4: %w", err)
+	}
 	return nil
 }
 

@@ -49,8 +49,11 @@ func (r *memoryJobRepository) ListIngestionJobs(int) ([]dao.IngestionJob, error)
 func (r *memoryJobRepository) ClaimIngestionJob() (dao.IngestionJob, bool, error) {
 	return dao.IngestionJob{}, false, nil
 }
-func (r *memoryJobRepository) UpdateIngestionJob(dao.IngestionJob) error { return nil }
-func (r *memoryJobRepository) RecoverIngestionJobs() error               { return nil }
+func (r *memoryJobRepository) UpdateIngestionJob(job dao.IngestionJob) error {
+	r.jobs[job.ID] = job
+	return nil
+}
+func (r *memoryJobRepository) RecoverIngestionJobs() error { return nil }
 
 type unusedCatalog struct{}
 

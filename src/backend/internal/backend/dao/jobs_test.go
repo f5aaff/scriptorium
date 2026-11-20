@@ -19,6 +19,10 @@ func TestSQLiteIngestionJobLifecycleAndRecovery(t *testing.T) {
 		t.Fatalf("claim = %#v, %v, %v", claimed, ok, err)
 	}
 	claimed.Processed, claimed.Failed = 2, 1
+	claimed.Results = []ImportFileResult{
+		{Filename: "book.txt", Status: "imported", DocumentID: "document-1"},
+		{Filename: "broken.txt", Status: "failed", Error: "Import failed"},
+	}
 	if err := db.UpdateIngestionJob(claimed); err != nil {
 		t.Fatal(err)
 	}
@@ -29,14 +33,17 @@ func TestSQLiteIngestionJobLifecycleAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recovered.Status != "queued" || recovered.Processed != 0 || recovered.Failed != 0 {
+	if recovered.Status != "queued" || recovered.Processed != 2 || recovered.Failed != 1 {
 		t.Fatalf("unexpected recovered state: %#v", recovered)
+	}
+	if len(recovered.Results) != 2 || recovered.Results[0].DocumentID != "document-1" || recovered.Results[1].Status != "failed" {
+		t.Fatalf("results lost during recovery: %#v", recovered.Results)
 	}
 	if string(recovered.Payload) != string(payload) {
 		t.Fatalf("payload changed during recovery: %s", recovered.Payload)
 	}
 	listed, err := db.ListIngestionJobs(10)
-	if err != nil || len(listed) != 1 || listed[0].ID != "job-1" {
+	if err != nil || len(listed) != 1 || listed[0].ID != "job-1" || len(listed[0].Results) != 0 {
 		t.Fatalf("list = %#v, err=%v", listed, err)
 	}
 }
