@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { parseSearch, searchParams } from '../librarySearch';
+  import { LibrarySearch, searchParams, type SearchCriteria } from '../librarySearch';
   import ItemCard from './ItemCard.svelte';
   import EditModal from './EditModal.svelte';
   import { API_BASE_URL } from '../config';
@@ -40,19 +40,20 @@
     results: LibraryItem[];
   }
 
-  let items: LibraryItem[] = [];
   let filteredItems: LibraryItem[] = [];
   let loading = false;
   let selectedItem: LibraryItem | null = null;
   let showCard = false;
-  let page = 1;
-  let hasMore = true;
   let searchQuery = '';
   let searchFocused = false;
-  let searchKey = '';
-  let searchValue = '';
-  let searchTimeout: number | null = null;
-  let isInitialLoad = true;
+  let searchError = '';
+  let searchLoaded = false;
+  const search = new LibrarySearch<LibraryItem>(fetchItems, state => {
+    filteredItems = state.items;
+    loading = state.loading;
+    searchError = state.error;
+    searchLoaded = state.loaded;
+  });
   let editingItem: LibraryItem | null = null;
   let converting = false;
 
@@ -60,12 +61,12 @@
     return error instanceof Error ? error.message : String(error);
   }
 
-  async function fetchItems(pageNum: number): Promise<{ items: LibraryItem[], hasMore: boolean }> {
-    const params = searchParams(parseSearch(searchQuery), pageNum);
+  async function fetchItems(criteria: SearchCriteria, pageNum: number, signal: AbortSignal): Promise<{ items: LibraryItem[], hasMore: boolean }> {
+    const params = searchParams(criteria, pageNum);
 
     const url = `${API_BASE_URL}/data/search?${params.toString()}`;
 
-    const response = await apiFetch(url);
+    const response = await apiFetch(url, { signal });
 
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -79,68 +80,13 @@
     };
   }
 
-  async function performSearch() {
-    if (!searchQuery.trim()) {
-      await loadMoreItems();
-      return;
-    }
-
-    loading = true;
-    try {
-      const { items: searchResults, hasMore: hasMoreResults } = await fetchItems(1);
-
-      items = searchResults;
-      filteredItems = searchResults;
-      hasMore = hasMoreResults;
-      page = 2;
-    } catch (error) {
-      console.error('Search failed:', error);
-    } finally {
-      loading = false;
-    }
-  }
-
-  $: {
-    if (searchQuery.trim()) {
-      if (searchTimeout) {
-        clearTimeout(searchTimeout);
-      }
-      searchTimeout = setTimeout(() => {
-        performSearch();
-      }, 300);
-    } else if (!isInitialLoad) {
-      if (searchTimeout) {
-        clearTimeout(searchTimeout);
-        searchTimeout = null;
-      }
-      items = [];
-      filteredItems = [];
-      page = 1;
-      hasMore = true;
-      loadMoreItems();
-    }
+  function handleSearchInput(event: Event) {
+    searchQuery = (event.target as HTMLInputElement).value;
+    search.setQuery(searchQuery, searchQuery.trim() ? 300 : 0);
   }
 
   async function loadMoreItems() {
-    if (loading || !hasMore) return;
-
-    loading = true;
-    try {
-      const { items: newItems, hasMore: hasMoreResults } = await fetchItems(page);
-
-      if (newItems.length === 0) {
-        hasMore = false;
-      } else {
-        items = [...items, ...newItems];
-        filteredItems = [...filteredItems, ...newItems];
-        page++;
-        hasMore = hasMoreResults;
-      }
-    } catch (error) {
-      console.error('Failed to load items:', error);
-    } finally {
-      loading = false;
-    }
+    await search.loadMore();
   }
 
   function selectItem(item: LibraryItem) {
@@ -157,20 +103,14 @@
     const target = event.target as HTMLElement;
     const { scrollTop, scrollHeight, clientHeight } = target;
 
-    if (scrollHeight - scrollTop <= clientHeight * 1.5) {
+    if (!searchError && scrollHeight - scrollTop <= clientHeight * 1.5) {
       loadMoreItems();
     }
   }
 
   function clearSearch() {
     searchQuery = '';
-    searchKey = '';
-    searchValue = '';
-    items = [];
-    filteredItems = [];
-    page = 1;
-    hasMore = true;
-    loadMoreItems();
+    search.setQuery('');
   }
 
   async function openItem(item: LibraryItem) {
@@ -217,11 +157,7 @@
     editingItem = null;
     showCard = false;
     selectedItem = null;
-    items = [];
-    filteredItems = [];
-    page = 1;
-    hasMore = true;
-    await loadMoreItems();
+    search.setQuery(searchQuery);
   }
 
   function handleEditCancel() {
@@ -326,8 +262,7 @@
         alert(`Successfully deleted "${item.Title}"`);
       }
 
-      items = items.filter(libItem => libItem.Uuid !== item.Uuid);
-      filteredItems = filteredItems.filter(libItem => libItem.Uuid !== item.Uuid);
+      search.updateItems(items => items.filter(libItem => libItem.Uuid !== item.Uuid));
 
       if (selectedItem && selectedItem.Uuid === item.Uuid) {
         selectedItem = null;
@@ -339,8 +274,8 @@
   }
 
   onMount(() => {
-    loadMoreItems();
-    isInitialLoad = false;
+    search.setQuery(searchQuery);
+    return () => search.dispose();
   });
 </script>
 
@@ -355,7 +290,8 @@
       <input
         type="text"
         placeholder="Search... (or use author:, type:, dewey: prefixes)"
-        bind:value={searchQuery}
+        value={searchQuery}
+        on:input={handleSearchInput}
         on:focus={() => searchFocused = true}
         on:blur={() => searchFocused = false}
         class="search-input"
