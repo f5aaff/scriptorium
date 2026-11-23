@@ -15,6 +15,24 @@ const item = (id: string) => ({ Uuid: id, Title: id, FileType: '.txt' });
 beforeEach(() => vi.mocked(apiFetch).mockReset());
 afterEach(() => cleanup());
 
+describe('text extraction feedback', () => {
+  it.each([
+    ['complete', 'Text extracted and indexed.'],
+    ['truncated', 'Text partially indexed (extraction limit reached).'],
+    ['unavailable', 'Extraction tool unavailable. PDF extraction requires Poppler (pdftotext) on the server.'],
+    ['no_text', 'No extractable text found. This PDF may need OCR.'],
+    ['failed', 'Text extraction failed. The original file is retained.'],
+    ['unsupported', 'Text extraction is not supported for this format.']
+  ])('explains the %s outcome in document details', async (status, message) => {
+    vi.mocked(apiFetch).mockImplementation(async input => String(input).includes('/data/read/')
+      ? new Response(JSON.stringify({ value: JSON.stringify({ ...item('PDF document'), ExtractionStatus: status }) }))
+      : response());
+    render(Library, { permissions, initialDocumentID: 'pdf-id' });
+    await screen.findByRole('dialog', { name: 'PDF document' });
+    expect(screen.getByText(message)).toBeTruthy();
+  });
+});
+
 describe('imported document links', () => {
   it('reports a deleted record without breaking library browsing', async () => {
     vi.mocked(apiFetch).mockImplementation(async input => String(input).includes('/data/read/')

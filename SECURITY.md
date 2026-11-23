@@ -37,6 +37,24 @@ multiple accounts, roles, sharing permissions, or per-document authorization.
 - File storage uses generated storage keys and validates local paths, rejecting
   traversal and symlink components.
 
+## PDF extraction boundary
+
+PDF text extraction invokes the optional Poppler `pdftotext` executable directly,
+without a shell or request-controlled command flags. Sources are copied to private
+temporary files, removed on completion or failure, and limited to 100 MiB. Captured
+text is limited to 1 MiB, extraction (including staging and queueing) times out after
+30 seconds, and at most two PDF subprocesses run at once. Parent cancellation or
+the output limit terminates the extractor. Tool stderr is discarded rather than
+returned to clients or accumulated without a bound.
+
+These controls do **not** sandbox Poppler or impose a hard memory limit on the
+child process. Malicious PDF parser inputs remain a risk. Run a maintained Poppler
+version under a dedicated unprivileged account, with host/container resource
+limits and filesystem/network isolation appropriate to the deployment. Do not
+interpret a successful extraction as a malware scan or a guarantee that the PDF
+is safe to open. OCR, password handling, and existing-item re-extraction are not
+implemented.
+
 ## Recommended internet-facing deployment
 
 Do not expose the Scriptorium HTTP listener directly to the internet. Keep it

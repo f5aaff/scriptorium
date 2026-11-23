@@ -46,7 +46,9 @@ src/
 - Original files are preserved in storage under generated identifiers.
 - Imports are staged to a private temporary file before processing.
 - SHA-256 duplicate detection avoids storing the same upload twice; concurrent duplicates are protected by a transactional content-hash registry.
-- Plain text, Markdown, CSV, logs and reStructuredText have bounded UTF-8 text extraction (up to 1 MiB per item); extraction status distinguishes complete, truncated, failed and unsupported formats.
+- Plain text, Markdown, CSV, logs and reStructuredText have bounded UTF-8 text extraction (up to 1 MiB per item).
+- PDFs have optional bounded text extraction using Poppler's `pdftotext`. Extracted text participates in full-text search and suggested Dewey classification. PDF signatures are recognized even with a missing or misleading filename extension.
+- Document details explain extraction outcomes: complete, truncated, failed, unsupported, unavailable tool, or no extractable PDF text.
 - Catalogue writes roll back the stored original if persistence fails.
 - Background batch jobs are persisted in SQLite and recover after process restarts. Committed per-file outcomes are retained; files whose outcome was not committed may be replayed safely because content hashes prevent duplicate catalogue entries.
 - The **Imports** screen lists the latest 25 jobs for the shared library, automatically updates active jobs, and shows per-file imported/duplicate/failed outcomes. Successful and duplicate files link to their catalogue records.
@@ -91,7 +93,7 @@ src/
 These are explicit remaining product milestones, not implied capabilities:
 
 1. Automatic watch-folder monitoring, import cancellation/retry controls, and a configured-directory import UI.
-2. Format-specific metadata and text extraction for PDF, EPUB, Office and other binary document formats.
+2. PDF metadata extraction, OCR, reprocessing existing catalogue items, and metadata/text extraction for EPUB, Office and other binary document formats.
 3. Full Dewey schedules and a richer classification workflow, including review queues and user overrides in the UI.
 4. Embedded PDF, EPUB, text, image, audio and video readers.
 5. Multi-user accounts, roles, sharing permissions and stronger account recovery.
@@ -103,6 +105,7 @@ These are explicit remaining product milestones, not implied capabilities:
 - Go 1.23 or later.
 - CGO enabled and a working C compiler (GCC or Clang; Xcode Command Line Tools on macOS).
 - Node.js 20.19+ or 22.12+ (a supported LTS release is recommended) and npm.
+- Poppler's `pdftotext` is optional and needed for PDF text extraction (installation below).
 - Pandoc is optional and only needed for document conversions that Pandoc supports.
 - Wails v2 CLI for the desktop build.
 
@@ -138,6 +141,47 @@ The backend reads environment variables directly; it does not currently load `.e
 | `VITE_API_BASE_URL` | same-origin in browser; localhost for Wails | API base URL embedded in the frontend build |
 
 **Security warning:** the API now requires an authenticated owner session, but it is not yet ready for public exposure. The application does not terminate TLS itself. For LAN and internet access, use an HTTPS reverse proxy, keep the Go listener private, and follow `SECURITY.md`. Direct HTTP access on a LAN is a development convenience, not the recommended deployment.
+
+## Optional PDF text extraction
+
+Install Poppler **on the backend host** and make `pdftotext` available on the
+service's `PATH`. It is not bundled in release archives.
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install poppler-utils
+# Fedora
+sudo dnf install poppler-utils
+# macOS (Homebrew)
+brew install poppler
+```
+
+Newly imported PDFs are indexed automatically. Installing Poppler does not
+reprocess existing records, and uploading identical content returns the existing
+record without re-extraction. A reprocessing workflow is not implemented yet.
+
+| Extraction status | Meaning |
+|---|---|
+| `complete` | Text was extracted and indexed |
+| `truncated` | Only a bounded UTF-8 prefix was indexed |
+| `unavailable` | `pdftotext` was not found; the original remains downloadable |
+| `no_text` | The PDF had no extractable text; it may be a scan requiring OCR |
+| `failed` | Extraction failed or timed out; the original is retained |
+| `unsupported` | No extraction adapter handles this format |
+
+PDF extraction has a 100 MiB input limit, a 1 MiB captured-text limit, a 30-second
+timeout including staging and queueing, and at most two concurrent subprocesses.
+Temporary copies are private and removed after extraction. Output-limit
+truncation stops the subprocess without splitting a UTF-8 character. Corrupt,
+password-protected, or image-only PDFs remain accepted as library files; text
+extraction is not guaranteed. No OCR or embedded PDF metadata extraction is
+performed.
+
+These bounds are **not an OS sandbox or a subprocess memory limit**. Keep Poppler
+patched and isolate the service with host/container resource limits when handling
+untrusted PDFs; see `SECURITY.md`. CI installs Poppler to exercise real extraction
+and full-text indexing tests. Those integration tests skip locally if the optional
+tool is absent; deterministic process/failure tests still run.
 
 ## Frontend development
 

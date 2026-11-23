@@ -20,6 +20,8 @@ func TestPDFExtractorProcess(t *testing.T) {
 	switch os.Getenv("SCRIPTORIUM_PDF_MODE") {
 	case "sleep":
 		time.Sleep(10 * time.Second)
+	case "huge":
+		os.Stdout.WriteString(strings.Repeat("x", DefaultTextExtractionLimit*2))
 	case "invalid":
 		os.Stdout.Write([]byte("abcdef\xffmore"))
 	case "fail":
@@ -78,6 +80,15 @@ func TestPDFAdapterBoundsOutputAtUTF8Boundary(t *testing.T) {
 	result, err := adapter.Extract(context.Background(), strings.NewReader("pdf"))
 	if err != nil || result.Text != "abcdef" || !result.Truncated {
 		t.Fatalf("truncated extraction = %#v, %v", result, err)
+	}
+}
+
+func TestPDFAdapterClampsConfiguredOutputLimit(t *testing.T) {
+	adapter := pdfTestAdapter(t, "huge", "")
+	adapter.MaxBytes = DefaultTextExtractionLimit * 2
+	result, err := adapter.Extract(context.Background(), strings.NewReader("pdf"))
+	if err != nil || len(result.Text) != DefaultTextExtractionLimit || !result.Truncated {
+		t.Fatalf("output limit not enforced: %d bytes, truncated=%v, err=%v", len(result.Text), result.Truncated, err)
 	}
 }
 

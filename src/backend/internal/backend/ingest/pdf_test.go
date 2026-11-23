@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -64,6 +65,19 @@ func TestPDFExtractionStatusPreservesOriginal(t *testing.T) {
 	}
 }
 
+func TestPDFImportWithoutPoppler(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	storage := fao.NewLocalFao(t.TempDir())
+	service, err := New(&memoryCatalog{}, storage, nil, DefaultMaxFileSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Import(context.Background(), Request{Filename: "without-tool.pdf"}, strings.NewReader("%PDF-1.4\nfixture"))
+	if err != nil || result.Metadata.ExtractionStatus != "unavailable" || !storage.FileExists(result.Metadata.Path) {
+		t.Fatalf("PDF without Poppler = %#v, %v", result, err)
+	}
+}
+
 func TestSignatureIdentifiedPDFUsesPDFAdapter(t *testing.T) {
 	for _, filename := range []string{"no-extension", "misnamed.txt", "unknown.bin"} {
 		t.Run(filename, func(t *testing.T) {
@@ -75,6 +89,38 @@ func TestSignatureIdentifiedPDFUsesPDFAdapter(t *testing.T) {
 			result, err := service.Import(context.Background(), Request{Filename: filename}, strings.NewReader("%PDF-1.4\nfixture"))
 			if err != nil || result.Metadata.ExtractedText != adapter.result.Text || result.Metadata.OriginalFilename != filename {
 				t.Fatalf("signature-selected extraction = %#v, %v", result, err)
+			}
+		})
+	}
+}
+
+func TestPDFImportWithoutTextWithPoppler(t *testing.T) {
+	if _, err := exec.LookPath("pdftotext"); err != nil {
+		t.Skip("optional pdftotext executable is not installed")
+	}
+	data, err := os.ReadFile("../formats/testdata/searchable.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the PDF's byte offsets and stream length unchanged while replacing
+	// the text drawing instructions with legal whitespace-only page content.
+	const instructions = "BT /F1 12 Tf 72 720 Td (RarePDFPhrase programming software databases) Tj ET"
+	blank := bytes.Replace(data, []byte(instructions), bytes.Repeat([]byte(" "), len(instructions)), 1)
+	service, err := New(&memoryCatalog{}, fao.NewLocalFao(t.TempDir()), nil, DefaultMaxFileSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, status string
+		data         []byte
+	}{
+		{"blank.pdf", "no_text", blank},
+		{"broken.pdf", "failed", []byte("%PDF-1.4\nnot a valid document")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := service.Import(context.Background(), Request{Filename: test.name}, bytes.NewReader(test.data))
+			if err != nil || result.Metadata.ExtractionStatus != test.status {
+				t.Fatalf("PDF import = %#v, %v", result, err)
 			}
 		})
 	}

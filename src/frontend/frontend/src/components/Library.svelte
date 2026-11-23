@@ -41,11 +41,21 @@
     MediaType?: string;
     Size?: number;
     SHA256?: string;
+    ExtractionStatus?: string;
     ClassificationStatus?: string;
     SuggestedDeweyDecimal?: string;
     SuggestedDeweyName?: string;
     ClassificationConfidence?: number;
   }
+
+  const extractionMessages: Record<string, string> = {
+    complete: 'Text extracted and indexed.',
+    truncated: 'Text partially indexed (extraction limit reached).',
+    unavailable: 'Extraction tool unavailable. PDF extraction requires Poppler (pdftotext) on the server.',
+    no_text: 'No extractable text found. This PDF may need OCR.',
+    failed: 'Text extraction failed. The original file is retained.',
+    unsupported: 'Text extraction is not supported for this format.'
+  };
 
   interface SearchResponse {
     message: string;
@@ -458,6 +468,12 @@
               <div class="detail-row">
                 <span class="label">Classification:</span>
                 <span>{item.ClassificationStatus}</span>
+              </div>
+            {/if}
+            {#if item.ExtractionStatus}
+              <div class="detail-row">
+                <span class="label">Text extraction:</span>
+                <span>{extractionMessages[item.ExtractionStatus] || item.ExtractionStatus}</span>
               </div>
             {/if}
             {#if item.MediaType}
