@@ -104,6 +104,8 @@ func (a PlainTextAdapter) Extract(ctx context.Context, source io.Reader) (Extrac
 	return ExtractedMetadata{Text: string(data), Truncated: truncated}, nil
 }
 
+// NewDefaultAdapterRegistry registers plain-text and optional Poppler PDF extraction.
+// Missing optional tools are reported during extraction, not application startup.
 func NewDefaultAdapterRegistry() *AdapterRegistry {
-	return NewAdapterRegistry(PlainTextAdapter{MaxBytes: DefaultTextExtractionLimit})
+	return NewAdapterRegistry(PlainTextAdapter{MaxBytes: DefaultTextExtractionLimit}, PDFAdapter{})
 }

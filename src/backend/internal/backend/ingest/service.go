@@ -123,21 +123,34 @@ func (s *Service) Import(ctx context.Context, request Request, source io.Reader)
 	if _, err := staged.Seek(0, io.SeekStart); err != nil {
 		return Result{}, err
 	}
-	extracted, err := s.adapters.Extract(ctx, filename, staged)
+	extractionFilename := filename
+	if identification.MediaType == "application/pdf" {
+		// Signature-identified PDFs use the PDF adapter even when an upload has
+		// no extension or is mislabeled as text. Preserve the original filename.
+		extractionFilename = "document.pdf"
+	}
+	extracted, err := s.adapters.Extract(ctx, extractionFilename, staged)
 	extractionStatus := "unsupported"
-	if s.adapters.Supports(filename) {
+	if s.adapters.Supports(extractionFilename) {
 		extractionStatus = "complete"
 	}
 	if ctx.Err() != nil {
 		return Result{}, ctx.Err()
 	}
-	if err != nil {
+	if errors.Is(err, formats.ErrExtractorUnavailable) {
+		extractionStatus = "unavailable"
+		extracted = formats.ExtractedMetadata{}
+	} else if err != nil {
 		extractionStatus = "failed"
 		// Extraction is an enhancement, not a condition of acceptance. Keep the
 		// original and record that extraction failed so it can be retried later.
 		extracted = formats.ExtractedMetadata{}
 	} else if extracted.Truncated {
 		extractionStatus = "truncated"
+	} else if extractionStatus == "complete" && identification.MediaType == "application/pdf" && strings.TrimSpace(extracted.Text) == "" {
+		// Scans and image-only PDFs need OCR; an empty successful extraction is
+		// not evidence that their visible contents were indexed.
+		extractionStatus = "no_text"
 	}
 
 	id := uuid.New()
