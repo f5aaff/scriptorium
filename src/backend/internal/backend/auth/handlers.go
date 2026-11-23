@@ -145,12 +145,24 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "user deleted"})
 }
 
+const sessionUserKey = "scriptorium.session.user"
+
+// CurrentUser returns the account authenticated by RequireSession, never a
+// principal supplied in a request body or query parameter.
+func CurrentUser(c *gin.Context) (User, bool) {
+	value, exists := c.Get(sessionUserKey)
+	user, ok := value.(User)
+	return user, exists && ok && user.ID != ""
+}
+
 func (h *Handlers) RequireSession() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !h.Manager.Authenticated(c.Request) {
+		user, authenticated := h.Manager.SessionUser(c.Request)
+		if !authenticated {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
 			return
 		}
+		c.Set(sessionUserKey, user)
 		method := c.Request.Method
 		if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions && !h.Manager.ValidCSRF(c.Request) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "missing or invalid CSRF token"})

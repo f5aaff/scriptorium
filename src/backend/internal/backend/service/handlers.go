@@ -349,17 +349,19 @@ func (f *FileHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 	groupName := "/file"
 
 	routes := map[string]gin.HandlerFunc{
-		"POST /upload":            f.UploadFile,
-		"POST /imports/upload":    f.UploadBatch,
-		"POST /imports/directory": f.ImportDirectory,
-		"GET /imports/roots":      f.ListImportRoots,
-		"GET /imports/jobs":       f.ListImportJobs,
-		"GET /imports/jobs/:id":   f.GetImportJob,
-		"GET /download/:uuid":     f.DownloadFile,
-		"GET /preview/:uuid":      f.PreviewFile,
-		"HEAD /preview/:uuid":     f.PreviewFile,
-		"POST /convert/:uuid":     f.ConvertFile,
-		"POST /reextract/:uuid":   f.ReextractText,
+		"POST /upload":             f.UploadFile,
+		"POST /imports/upload":     f.UploadBatch,
+		"POST /imports/directory":  f.ImportDirectory,
+		"GET /imports/roots":       f.ListImportRoots,
+		"GET /imports/jobs":        f.ListImportJobs,
+		"GET /imports/jobs/:id":    f.GetImportJob,
+		"GET /download/:uuid":      f.DownloadFile,
+		"GET /reading-state/:uuid": f.ReadingState,
+		"PUT /reading-state/:uuid": f.ReadingState,
+		"GET /preview/:uuid":       f.PreviewFile,
+		"HEAD /preview/:uuid":      f.PreviewFile,
+		"POST /convert/:uuid":      f.ConvertFile,
+		"POST /reextract/:uuid":    f.ReextractText,
 	}
 
 	return groupName, routes

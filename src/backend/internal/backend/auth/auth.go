@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -44,6 +45,7 @@ type Permissions struct {
 }
 
 type User struct {
+	ID           string      `json:"id"`
 	Username     string      `json:"username"`
 	Admin        bool        `json:"admin"`
 	Disabled     bool        `json:"disabled"`
@@ -92,6 +94,7 @@ func NewManager(path, bootstrapUsername, bootstrapPassword string, cookieSecure 
 		if err := json.Unmarshal(data, &stored); err != nil {
 			return nil, fmt.Errorf("decode authentication file: %w", err)
 		}
+		migrated := false
 		if len(stored.Users) > 0 {
 			for key, user := range stored.Users {
 				if key == "" || user.Username == "" || user.PasswordHash == "" {
@@ -102,11 +105,23 @@ func NewManager(path, bootstrapUsername, bootstrapPassword string, cookieSecure 
 		} else if stored.Username != "" && stored.PasswordHash != "" {
 			// Preserve the existing owner account and grant it administrator access.
 			m.users[stored.Username] = User{Username: stored.Username, Admin: true, Permissions: Permissions{Upload: true, Edit: true, Delete: true}, PasswordHash: stored.PasswordHash}
-			if err := m.persistLocked(); err != nil {
-				return nil, fmt.Errorf("migrate authentication file: %w", err)
-			}
+			migrated = true
 		} else {
 			return nil, errors.New("authentication file is incomplete")
+		}
+		// Account identities survive password/permission changes, but never username
+		// reuse. Persist legacy assignments before accepting any sessions.
+		identities := make(map[string]bool)
+		for name, user := range m.users {
+			if user.ID == "" {
+				user.ID = uuid.NewString()
+				m.users[name] = user
+				migrated = true
+			}
+			if _, err := uuid.Parse(user.ID); err != nil || identities[user.ID] {
+				return nil, errors.New("authentication file contains an invalid or duplicate account identity")
+			}
+			identities[user.ID] = true
 		}
 		admins := 0
 		for _, user := range m.users {
@@ -116,6 +131,11 @@ func NewManager(path, bootstrapUsername, bootstrapPassword string, cookieSecure 
 		}
 		if admins == 0 {
 			return nil, errors.New("authentication file has no enabled administrator")
+		}
+		if migrated {
+			if err := m.persistLocked(); err != nil {
+				return nil, fmt.Errorf("migrate account identities: %w", err)
+			}
 		}
 		return m, nil
 	}
@@ -134,7 +154,7 @@ func NewManager(path, bootstrapUsername, bootstrapPassword string, cookieSecure 
 	if err != nil {
 		return nil, fmt.Errorf("hash bootstrap password: %w", err)
 	}
-	m.users[bootstrapUsername] = User{Username: bootstrapUsername, Admin: true, Permissions: Permissions{Upload: true, Edit: true, Delete: true}, PasswordHash: string(hash)}
+	m.users[bootstrapUsername] = User{ID: uuid.NewString(), Username: bootstrapUsername, Admin: true, Permissions: Permissions{Upload: true, Edit: true, Delete: true}, PasswordHash: string(hash)}
 	if err := m.persistLocked(); err != nil {
 		return nil, err
 	}
@@ -365,7 +385,7 @@ func (m *Manager) CreateUser(username, password string, permissions Permissions)
 	if _, exists := m.users[username]; exists {
 		return ErrUserExists
 	}
-	m.users[username] = User{Username: username, Permissions: permissions, PasswordHash: string(hash)}
+	m.users[username] = User{ID: uuid.NewString(), Username: username, Permissions: permissions, PasswordHash: string(hash)}
 	if err := m.persistLocked(); err != nil {
 		delete(m.users, username)
 		return err

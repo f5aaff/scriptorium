@@ -140,6 +140,20 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, CURRENT_
 	if _, err := db.Exec(`INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, CURRENT_TIMESTAMP)`); err != nil {
 		return fmt.Errorf("record SQLite schema migration 4: %w", err)
 	}
+	if _, err := db.Exec(`
+CREATE TABLE IF NOT EXISTS reading_positions (
+    account_id TEXT NOT NULL,
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    source_revision TEXT NOT NULL,
+    position_json TEXT NOT NULL,
+    version INTEGER NOT NULL CHECK (version > 0),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, document_id)
+);
+INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (5, CURRENT_TIMESTAMP);
+`); err != nil {
+		return fmt.Errorf("apply SQLite schema migration 5: %w", err)
+	}
 	return nil
 }
 
