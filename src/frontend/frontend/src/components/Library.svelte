@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import { LibrarySearch, searchParams, type SearchCriteria } from '../librarySearch';
   import ItemCard from './ItemCard.svelte';
+  import ReextractAction from './ReextractAction.svelte';
+  import type { LibraryItem } from '../libraryTypes';
   import EditModal from './EditModal.svelte';
   import { API_BASE_URL } from '../config';
   import { apiFetch, type UserPermissions } from '../api';
@@ -25,27 +27,6 @@
         documentError = 'Could not open the imported document. It may have been deleted.';
       }
     }
-  }
-
-  interface LibraryItem {
-    Title: string;
-    Author: string;
-    PublishDate: string;
-    LastUpdated: string;
-    FileType: string;
-    DocType: string;
-    DeweyDecimal: string;
-    Path: string;
-    Uuid: string;
-    OriginalFilename?: string;
-    MediaType?: string;
-    Size?: number;
-    SHA256?: string;
-    ExtractionStatus?: string;
-    ClassificationStatus?: string;
-    SuggestedDeweyDecimal?: string;
-    SuggestedDeweyName?: string;
-    ClassificationConfidence?: number;
   }
 
   const extractionMessages: Record<string, string> = {
@@ -121,6 +102,14 @@
   function selectItem(item: LibraryItem) {
     selectedItem = item;
     showCard = true;
+  }
+
+  function handleReextracted(item: LibraryItem) {
+    if (selectedItem?.Uuid !== item.Uuid) return;
+    selectedItem = item;
+    // A new index can change which records match the active query. Reload from
+    // page one instead of leaving stale cards or pagination boundaries visible.
+    search.setQuery(searchQuery);
   }
 
   function closeCard() {
@@ -516,6 +505,11 @@
 
 
 <div class="card-actions">
+  {#if permissions.edit && item.Path}
+    {#key item.Uuid}
+      <ReextractAction documentID={item.Uuid} on:updated={({ detail }) => handleReextracted(detail)} />
+    {/key}
+  {/if}
   <button class="action-button primary" on:click={() => openItem(item)}>
     Open
   </button>

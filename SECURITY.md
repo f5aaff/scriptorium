@@ -52,8 +52,22 @@ child process. Malicious PDF parser inputs remain a risk. Run a maintained Poppl
 version under a dedicated unprivileged account, with host/container resource
 limits and filesystem/network isolation appropriate to the deployment. Do not
 interpret a successful extraction as a malware scan or a guarantee that the PDF
-is safe to open. OCR, password handling, and existing-item re-extraction are not
-implemented.
+is safe to open. OCR and PDF password handling are not implemented.
+
+Existing-item re-extraction requires `edit` permission and accepts only a catalogue
+UUID, never a client-selected server path. It reads the original through the
+storage-root-confined abstraction and checks its SHA-256 digest when one exists.
+Legacy records without digests are permitted, without an ingestion-identity
+backfill. At most two reprocessing requests (including source staging) are active;
+extra requests fail fast. Attempts have a 100 MiB source limit and a one-minute
+outer deadline in addition to PDF limits. Temporary staging files are private and
+removed when an attempt finishes.
+
+Extraction/index updates commit together and use a metadata snapshot check to
+reject concurrent edits or deletion. Confirmed classifications and editable
+metadata are preserved. Failed attempts do not clear previously indexed text.
+A successful empty extraction does clear old text. Cancellation is best-effort:
+it does not undo a transaction that committed before the cancellation arrived.
 
 ## Recommended internet-facing deployment
 

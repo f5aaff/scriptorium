@@ -87,6 +87,29 @@ func TestReextractRefreshesIndexAndPreservesOriginalAndMetadata(t *testing.T) {
 	}
 }
 
+func TestReextractRefreshesUnconfirmedSuggestionsAndHandlesEmptyPDF(t *testing.T) {
+	adapter := fixedPDFAdapter{result: formats.ExtractedMetadata{Text: "programming software"}}
+	processor, db, _, metadata := reprocessFixture(t, formats.NewAdapterRegistry(adapter), "%PDF-1.4\nfixture")
+	metadata.DeweyDecimal, metadata.ClassificationStatus = "", "unclassified"
+	if err := db.Update(&dao.Notes{Metadata: metadata}); err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.MustParse(metadata.Uuid)
+	result, err := processor.Reextract(context.Background(), id)
+	if err != nil || result.SuggestedDeweyDecimal != "004" || result.ClassificationStatus != "suggested" || result.DeweyDecimal != "" {
+		t.Fatalf("suggestion not refreshed: %#v, %v", result, err)
+	}
+	processor.adapters = formats.NewAdapterRegistry(fixedPDFAdapter{})
+	result, err = processor.Reextract(context.Background(), id)
+	if err != nil || result.ExtractionStatus != "no_text" || result.SuggestedDeweyDecimal != "" || result.ClassificationStatus != "unclassified" {
+		t.Fatalf("empty extraction retained stale derived fields: %#v, %v", result, err)
+	}
+	matches, err := db.FuzzySearch("programming")
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("empty extraction retained old text: %#v, %v", matches, err)
+	}
+}
+
 func TestReextractFailuresRetainPreviousText(t *testing.T) {
 	for _, test := range []struct {
 		name    string

@@ -49,6 +49,7 @@ src/
 - Plain text, Markdown, CSV, logs and reStructuredText have bounded UTF-8 text extraction (up to 1 MiB per item).
 - PDFs have optional bounded text extraction using Poppler's `pdftotext`. Extracted text participates in full-text search and suggested Dewey classification. PDF signatures are recognized even with a missing or misleading filename extension.
 - Document details explain extraction outcomes: complete, truncated, failed, unsupported, unavailable tool, or no extractable PDF text.
+- Existing items can be re-extracted from their stored originals using **Re-extract text** (requires `edit` permission). This refreshes text/search and unconfirmed Dewey suggestions without replacing originals or user-edited metadata.
 - Catalogue writes roll back the stored original if persistence fails.
 - Background batch jobs are persisted in SQLite and recover after process restarts. Committed per-file outcomes are retained; files whose outcome was not committed may be replayed safely because content hashes prevent duplicate catalogue entries.
 - The **Imports** screen lists the latest 25 jobs for the shared library, automatically updates active jobs, and shows per-file imported/duplicate/failed outcomes. Successful and duplicate files link to their catalogue records.
@@ -93,7 +94,7 @@ src/
 These are explicit remaining product milestones, not implied capabilities:
 
 1. Automatic watch-folder monitoring, import cancellation/retry controls, and a configured-directory import UI.
-2. PDF metadata extraction, OCR, reprocessing existing catalogue items, and metadata/text extraction for EPUB, Office and other binary document formats.
+2. PDF metadata extraction, OCR, bulk/background reprocessing, and metadata/text extraction for EPUB, Office and other binary document formats.
 3. Full Dewey schedules and a richer classification workflow, including review queues and user overrides in the UI.
 4. Embedded PDF, EPUB, text, image, audio and video readers.
 5. Multi-user accounts, roles, sharing permissions and stronger account recovery.
@@ -157,8 +158,9 @@ brew install poppler
 ```
 
 Newly imported PDFs are indexed automatically. Installing Poppler does not
-reprocess existing records, and uploading identical content returns the existing
-record without re-extraction. A reprocessing workflow is not implemented yet.
+reprocess existing records automatically, and uploading identical content returns
+the existing record without re-extraction. To refresh an existing item, open its
+details and select **Re-extract text** (requires `edit` permission).
 
 | Extraction status | Meaning |
 |---|---|
@@ -182,6 +184,39 @@ patched and isolate the service with host/container resource limits when handlin
 untrusted PDFs; see `SECURITY.md`. CI installs Poppler to exercise real extraction
 and full-text indexing tests. Those integration tests skip locally if the optional
 tool is absent; deterministic process/failure tests still run.
+
+### Re-extracting existing items
+
+`POST /file/reextract/:uuid` re-extracts one existing item synchronously and returns
+its updated public `metadata`. It accepts no editable metadata or filesystem-path
+parameters. This works for every supported extraction adapter, not just PDF.
+
+- Stored originals are read, not replaced. If a SHA-256 digest exists, it must
+  match before extraction. Legacy items without a digest can still be processed;
+  this operation does not backfill or change their ingestion identity.
+- Titles, authors, dates, document types, subjects, extra metadata, and confirmed
+  Dewey classifications are preserved. Only extraction/index fields, unconfirmed
+  suggestions, and the update timestamp change.
+- Concurrent metadata edits or deletion cause a conflict rather than being
+  overwritten. Saving an older metadata editor also preserves newer extraction
+  fields.
+- Failed, unavailable, unsupported, or cancelled attempts retain previous indexed
+  text **and its extraction status**. A successful `no_text` result intentionally
+  removes old extracted text. A truncated success replaces it with a bounded prefix.
+- At most two reprocessing requests run at once, including source staging. The
+  same item cannot be processed twice concurrently. Each attempt has a one-minute
+  outer deadline and a 100 MiB source limit, in addition to the PDF adapter limits.
+- Closing document details or navigating away aborts the browser request. This is
+  best-effort cancellation, not an undo of a transaction that already committed.
+- There is no durable reprocessing queue, bulk action, or automatic retry yet.
+
+The endpoint requires `edit`, not merely `upload`. Errors include `400` for an
+invalid UUID, `404` for a missing record, `409` for concurrent changes, an active
+attempt on the same item, or an unavailable/corrupt original, `422` for unsupported
+or failed extraction, `429` when both reprocessing slots are busy (`Retry-After: 2`),
+and `503` for a missing optional extractor or unavailable catalogue capability.
+An outer deadline returns `504`; cancellation returns `408` if the connection is
+still available to receive a response.
 
 ## Frontend development
 
@@ -268,6 +303,7 @@ wails build
 | `POST` | `/file/imports/directory` | Queue a directory/file import using `{ "root_id": "…", "path": "relative/path" }` |
 | `GET` | `/file/download/:uuid` | Download the original file |
 | `POST` | `/file/convert/:uuid` | Convert supported document formats with Pandoc |
+| `POST` | `/file/reextract/:uuid` | Re-extract one stored original and refresh indexed text (`edit` permission) |
 
 Job details include a `results` array when per-file outcomes are available. Each
 entry contains `filename`, `status` (`imported`, `duplicate`, or `failed`), and
@@ -319,7 +355,7 @@ The backend supports multiple accounts against one shared Scriptorium catalogue.
 ## Permissions
 
 - `upload`: `POST /file/upload`, `POST /file/imports/upload`, `POST /file/imports/directory`, `POST /file/convert/:uuid`, and `POST /data/create`.
-- `edit`: `PUT /data/update`.
+- `edit`: `PUT /data/update` and `POST /file/reextract/:uuid`.
 - `delete`: `DELETE /data/delete`.
 - Any authenticated account can browse, search, read, download, inspect import jobs, and use classification suggestions.
 - The bootstrap owner is an administrator and always retains all three permissions. Only an administrator can manage accounts.

@@ -15,6 +15,62 @@ const item = (id: string) => ({ Uuid: id, Title: id, FileType: '.txt' });
 beforeEach(() => vi.mocked(apiFetch).mockReset());
 afterEach(() => cleanup());
 
+describe('re-extraction', () => {
+  it.each([
+    [false, 'original-key', false],
+    [true, '', false],
+    [true, 'original-key', true]
+  ])('only offers the action with edit permission and an original', async (edit, path, visible) => {
+    vi.mocked(apiFetch).mockImplementation(async input => String(input).includes('/data/read/')
+      ? new Response(JSON.stringify({ value: JSON.stringify({ ...item('Existing PDF'), Path: path, ExtractionStatus: 'failed' }) }))
+      : response());
+    render(Library, { permissions: { ...permissions, edit }, initialDocumentID: 'pdf-id' });
+    await screen.findByRole('dialog', { name: 'Existing PDF' });
+    expect(!!screen.queryByRole('button', { name: 'Re-extract text' })).toBe(visible);
+  });
+
+  it('refreshes document details and reloads the active search after success', async () => {
+    const original = { ...item('Existing PDF'), Path: 'original-key', ExtractionStatus: 'failed', DeweyDecimal: '900' };
+    vi.mocked(apiFetch).mockImplementation(async input => String(input).includes('/file/reextract/')
+      ? new Response(JSON.stringify({ metadata: { ...original, ExtractionStatus: 'complete' } }))
+      : response([original]));
+    render(Library, { permissions });
+    await screen.findByText('Existing PDF');
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Search library' }), { target: { value: 'author: User author' } });
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2));
+    await screen.findByText('Existing PDF');
+    await fireEvent.click(screen.getByText('Existing PDF'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Re-extract text' }));
+    await screen.findByText('Text extraction and search index refreshed.');
+    expect(screen.getByText('Text extracted and indexed.')).toBeTruthy();
+    expect(screen.getByText('900')).toBeTruthy();
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(4));
+    const lastSearch = new URL(String(vi.mocked(apiFetch).mock.calls[3][0]));
+    expect(lastSearch.searchParams.get('key')).toBe('Author');
+    expect(lastSearch.searchParams.get('value')).toBe('User author');
+    expect(lastSearch.searchParams.get('page')).toBe('1');
+  });
+
+  it('keeps previous metadata visible when a re-extraction attempt fails', async () => {
+    vi.mocked(apiFetch).mockImplementation(async input => {
+      if (String(input).includes('/file/reextract/')) {
+        return new Response(JSON.stringify({ error: 'Missing tool; previous indexed text retained.' }), { status: 503 });
+      }
+      if (String(input).includes('/data/read/')) {
+        return new Response(JSON.stringify({ value: JSON.stringify({ ...item('Existing PDF'), Path: 'original-key', ExtractionStatus: 'complete' }) }));
+      }
+      return response();
+    });
+    render(Library, { permissions, initialDocumentID: 'pdf-id' });
+    await screen.findByRole('dialog', { name: 'Existing PDF' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Re-extract text' }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getByText('Text extracted and indexed.')).toBeTruthy();
+    expect(screen.getByText('Missing tool; previous indexed text retained.')).toBeTruthy();
+    expect(apiFetch).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('text extraction feedback', () => {
   it.each([
     ['complete', 'Text extracted and indexed.'],
