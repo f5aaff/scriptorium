@@ -44,11 +44,12 @@ type Handler interface {
 //---------------------------------------------------
 
 type FileHandler struct {
-	FaoService fao.FAO
-	APIHandler *APIHandler
-	Converter  converter.Converter
-	Ingestor   *ingest.Service
-	Jobs       *ingest.JobManager
+	FaoService  fao.FAO
+	APIHandler  *APIHandler
+	Converter   converter.Converter
+	Ingestor    *ingest.Service
+	Jobs        *ingest.JobManager
+	Reprocessor *ingest.Reprocessor
 }
 
 func (f *FileHandler) GetService() any {
@@ -57,7 +58,11 @@ func (f *FileHandler) GetService() any {
 
 func NewFileHandler(storage fao.FAO, apiHandler *APIHandler, conv converter.Converter) *FileHandler {
 	ingestor, _ := ingest.New(&apiHandler.DaoService, storage, formats.NewDefaultAdapterRegistry(), maxFileSize)
-	return &FileHandler{FaoService: storage, APIHandler: apiHandler, Converter: conv, Ingestor: ingestor}
+	handler := &FileHandler{FaoService: storage, APIHandler: apiHandler, Converter: conv, Ingestor: ingestor}
+	if repository, ok := apiHandler.DaoService.dao.(ingest.ReprocessRepository); ok {
+		handler.Reprocessor, _ = ingest.NewReprocessor(repository, storage, nil)
+	}
+	return handler
 }
 
 // UploadFile preserves and catalogues every uploaded file, including unknown formats.
@@ -352,6 +357,7 @@ func (f *FileHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 		"GET /imports/jobs/:id":   f.GetImportJob,
 		"GET /download/:uuid":     f.DownloadFile,
 		"POST /convert/:uuid":     f.ConvertFile,
+		"POST /reextract/:uuid":   f.ReextractText,
 	}
 
 	return groupName, routes
@@ -874,6 +880,8 @@ func NewHTTPServer(host string, port int, webRoot string, authManager *auth.Mana
 			switch {
 			case path == "/file" && method == http.MethodPost && (endpoint == "/upload" || endpoint == "/imports/upload" || endpoint == "/imports/directory" || strings.HasPrefix(endpoint, "/convert/")):
 				permission = "upload"
+			case path == "/file" && method == http.MethodPost && endpoint == "/reextract/:uuid":
+				permission = "edit"
 			case path == "/data" && method == http.MethodPost && endpoint == "/create":
 				permission = "upload"
 			case path == "/data" && method == http.MethodPut && endpoint == "/update":
