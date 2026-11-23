@@ -356,6 +356,8 @@ func (f *FileHandler) GetRouterGroups() (string, map[string]gin.HandlerFunc) {
 		"GET /imports/jobs":       f.ListImportJobs,
 		"GET /imports/jobs/:id":   f.GetImportJob,
 		"GET /download/:uuid":     f.DownloadFile,
+		"GET /preview/:uuid":      f.PreviewFile,
+		"HEAD /preview/:uuid":     f.PreviewFile,
 		"POST /convert/:uuid":     f.ConvertFile,
 		"POST /reextract/:uuid":   f.ReextractText,
 	}
@@ -725,6 +727,7 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 
 	allowedMethods := map[string]struct{}{
 		http.MethodGet:     {},
+		http.MethodHead:    {},
 		http.MethodPost:    {},
 		http.MethodPut:     {},
 		http.MethodDelete:  {},
@@ -737,6 +740,8 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 		"authorization": {},
 		"x-csrf-token":  {},
 		"origin":        {},
+		"range":         {},
+		"if-range":      {},
 	}
 
 	return func(c *gin.Context) {
@@ -758,6 +763,7 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 
 		c.Header("Access-Control-Allow-Origin", origin)
 		c.Header("Access-Control-Allow-Credentials", "true")
+		c.Header("Access-Control-Expose-Headers", "X-Scriptorium-Preview-Kind, Content-Range, Accept-Ranges")
 
 		// Handle browser preflight requests before authentication and routing.
 		if c.Request.Method == http.MethodOptions &&
@@ -793,11 +799,11 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 
 			c.Header(
 				"Access-Control-Allow-Methods",
-				"GET, POST, PUT, DELETE, OPTIONS",
+				"GET, HEAD, POST, PUT, DELETE, OPTIONS",
 			)
 			c.Header(
 				"Access-Control-Allow-Headers",
-				"Content-Type, Accept, Authorization, X-CSRF-Token",
+				"Content-Type, Accept, Authorization, X-CSRF-Token, Range, If-Range",
 			)
 			c.Header("Access-Control-Max-Age", "43200")
 
@@ -895,6 +901,8 @@ func NewHTTPServer(host string, port int, webRoot string, authManager *auth.Mana
 			switch method {
 			case http.MethodGet:
 				group.GET(endpoint, fn)
+			case http.MethodHead:
+				group.HEAD(endpoint, fn)
 			case http.MethodPost:
 				group.POST(endpoint, fn)
 			case http.MethodPut:
