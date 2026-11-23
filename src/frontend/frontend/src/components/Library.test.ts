@@ -15,6 +15,47 @@ const item = (id: string) => ({ Uuid: id, Title: id, FileType: '.txt' });
 beforeEach(() => vi.mocked(apiFetch).mockReset());
 afterEach(() => cleanup());
 
+describe('in-app file viewer', () => {
+  it('opens an authenticated preview for read-only users and returns to the same details', async () => {
+    vi.mocked(apiFetch).mockImplementation(async input => String(input).includes('/file/reading-state/')
+      ? new Response(JSON.stringify({ source_revision: 'source', version: 0, position: null }))
+      : String(input).includes('/file/preview/')
+      ? new Response('inert document source', { headers: { 'Content-Type': 'text/plain', 'X-Scriptorium-Preview-Kind': 'text' } })
+      : response([{ ...item('Readable document'), Path: 'original-key' }]));
+    render(Library, { permissions: { upload: false, edit: false, delete: false } });
+    await fireEvent.click(await screen.findByText('Readable document'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    expect((await screen.findByRole('textbox', { name: 'Document text' }) as HTMLTextAreaElement).value).toBe('inert document source');
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    await fireEvent.click(screen.getByRole('button', { name: 'Close viewer' }));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Readable document' })).toBeTruthy());
+    const urls = vi.mocked(apiFetch).mock.calls.map(([url]) => String(url));
+    expect(urls.some(url => url.includes('/file/preview/Readable%20document'))).toBe(true);
+    expect(urls.some(url => url.includes('/file/reading-state/Readable%20document'))).toBe(true);
+    expect(urls.some(url => url.includes('/file/download/') || url.includes('/file/convert/'))).toBe(false);
+  });
+
+  it('cancels pending previews when navigating away from the library', async () => {
+    vi.mocked(apiFetch).mockImplementation(async input => String(input).includes('/file/reading-state/')
+      ? new Response(JSON.stringify({ source_revision: 'source', version: 0, position: null }))
+      : String(input).includes('/file/preview/')
+      ? new Promise<Response>(() => {}) : response([{ ...item('Pending preview'), Path: 'original-key' }]));
+    const { unmount } = render(Library, { permissions });
+    await fireEvent.click(await screen.findByText('Pending preview'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    const request = vi.mocked(apiFetch).mock.calls.find(([url]) => String(url).includes('/file/preview/'));
+    unmount();
+    expect(request?.[1]?.signal?.aborted).toBe(true);
+  });
+
+  it('does not offer to preview metadata-only records without an original', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(response([item('Metadata only')]));
+    render(Library, { permissions });
+    await fireEvent.click(await screen.findByText('Metadata only'));
+    expect((screen.getByRole('button', { name: 'Open' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
 describe('re-extraction', () => {
   it.each([
     [false, 'original-key', false],

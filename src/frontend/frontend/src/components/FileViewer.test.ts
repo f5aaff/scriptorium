@@ -4,8 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import FileViewer from './FileViewer.svelte';
 import { loadPreview, type LoadedPreview } from '../preview';
 import { openPdf } from '../pdfRenderer';
+import { apiFetch } from '../api';
 import type { LibraryItem } from '../libraryTypes';
 
+vi.mock('../api', () => ({ apiFetch: vi.fn() }));
 vi.mock('../preview', () => ({ loadPreview: vi.fn() }));
 vi.mock('../pdfRenderer', () => ({ openPdf: vi.fn() }));
 const item: LibraryItem = {
@@ -16,6 +18,10 @@ const createURL = vi.fn(() => 'blob:preview');
 const revokeURL = vi.fn();
 beforeEach(() => {
   vi.mocked(loadPreview).mockReset();
+  let version = 0;
+  vi.mocked(apiFetch).mockImplementation(async (_input, init) => new Response(JSON.stringify({
+    source_revision: 'test-source', version: init?.method === 'PUT' ? ++version : version, position: null
+  })));
   createURL.mockClear(); revokeURL.mockClear();
   URL.createObjectURL = createURL;
   URL.revokeObjectURL = revokeURL;
@@ -27,12 +33,12 @@ afterEach(cleanup);
 
 it('shows source markup as inert selectable text', async () => {
   const source = '<script>window.compromised = true</script><svg onload="alert(1)"></svg>';
-  vi.mocked(loadPreview).mockResolvedValue({ kind: 'text', text: source, truncated: true });
+  vi.mocked(loadPreview).mockResolvedValue({ kind: 'text', text: source });
   const { container } = render(FileViewer, { item });
-  const textbox = await screen.findByRole('textbox', { name: 'File source text' }) as HTMLTextAreaElement;
+  const textbox = await screen.findByRole('textbox', { name: 'Document text' }) as HTMLTextAreaElement;
   expect(textbox.value).toBe(source);
   expect(container.querySelector('script, svg')).toBeNull();
-  expect(screen.getByText(/Showing the first 1 MiB/)).toBeTruthy();
+  expect(screen.getByText(/The complete document is available/)).toBeTruthy();
 });
 
 it.each(['image', 'audio', 'video'] as const)('renders %s using a local object URL and revokes it', async kind => {
@@ -60,7 +66,7 @@ it('delegates PDFs to PDF.js instead of using an iframe or conversion', async ()
 
 it('keeps download available for unsupported formats and supports retry', async () => {
   vi.mocked(loadPreview).mockRejectedValueOnce(new Error('Unsupported format; download the original.'))
-    .mockResolvedValueOnce({ kind: 'text', text: 'recovered text', truncated: false });
+    .mockResolvedValueOnce({ kind: 'text', text: 'recovered text' });
   const { component } = render(FileViewer, { item });
   const downloaded = vi.fn();
   component.$on('download', downloaded);
@@ -68,7 +74,7 @@ it('keeps download available for unsupported formats and supports retry', async 
   await fireEvent.click(screen.getByRole('button', { name: 'Download original' }));
   expect(downloaded.mock.calls[0][0].detail).toEqual(item);
   await fireEvent.click(screen.getByRole('button', { name: 'Retry preview' }));
-  expect((await screen.findByRole('textbox', { name: 'File source text' }) as HTMLTextAreaElement).value).toBe('recovered text');
+  expect((await screen.findByRole('textbox', { name: 'Document text' }) as HTMLTextAreaElement).value).toBe('recovered text');
 });
 
 it('aborts loading and ignores late responses after closing', async () => {
@@ -82,21 +88,21 @@ it('aborts loading and ignores late responses after closing', async () => {
 });
 
 it('traps keyboard focus, closes with Escape, and restores the previous focus', async () => {
-  vi.mocked(loadPreview).mockResolvedValue({ kind: 'text', text: 'source', truncated: false });
+  vi.mocked(loadPreview).mockResolvedValue({ kind: 'text', text: 'source' });
   const trigger = document.createElement('button');
   document.body.append(trigger);
   trigger.focus();
   const { component, unmount } = render(FileViewer, { item });
   const closed = vi.fn();
   component.$on('close', closed);
-  const source = await screen.findByRole('textbox', { name: 'File source text' });
+  const source = await screen.findByRole('textbox', { name: 'Document text' });
   source.focus();
   await fireEvent.keyDown(window, { key: 'Tab' });
   expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Download original' }));
   await fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
   expect(document.activeElement).toBe(source);
   await fireEvent.keyDown(window, { key: 'Escape' });
-  expect(closed).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(closed).toHaveBeenCalledTimes(1));
   unmount();
   await act(async () => {});
   expect(document.activeElement).toBe(trigger);

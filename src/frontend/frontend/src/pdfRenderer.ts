@@ -1,5 +1,5 @@
 import workerURL from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
-import type { PDFDocumentProxy } from 'pdfjs-dist';
+import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
 
 export const MAX_PDF_CANVAS_PIXELS = 16 * 1024 * 1024;
 const MAX_CANVAS_SIDE = 8192;
@@ -37,15 +37,22 @@ export async function openPdf(data: ArrayBuffer, signal: AbortSignal): Promise<P
   checkCancelled(signal);
   pdfjs.GlobalWorkerOptions.workerSrc = workerURL;
   const assets = new URL(`${import.meta.env.BASE_URL}pdfjs/`, document.baseURI).href;
-  const task = pdfjs.getDocument({
-    data: new Uint8Array(data),
-    cMapUrl: `${assets}cmaps/`, cMapPacked: true,
-    standardFontDataUrl: `${assets}standard_fonts/`,
-    wasmUrl: `${assets}wasm/`, iccUrl: `${assets}iccs/`,
-    useWorkerFetch: true, enableXfa: false, disableWorkerRendering: true,
-    maxImageSize: MAX_PDF_CANVAS_PIXELS, canvasMaxAreaInBytes: MAX_PDF_CANVAS_PIXELS * 4,
-    stopAtErrors: true
-  });
+  const worker = pdfjs.PDFWorker.create({ name: 'Scriptorium reader' });
+  let task: PDFDocumentLoadingTask;
+  try {
+    task = pdfjs.getDocument({
+      worker, data: new Uint8Array(data),
+      cMapUrl: `${assets}cmaps/`, cMapPacked: true,
+      standardFontDataUrl: `${assets}standard_fonts/`,
+      wasmUrl: `${assets}wasm/`, iccUrl: `${assets}iccs/`,
+      useWorkerFetch: true, useSystemFonts: false, enableXfa: false, disableWorkerRendering: true,
+      maxImageSize: -1, canvasMaxAreaInBytes: MAX_PDF_CANVAS_PIXELS * 4,
+      stopAtErrors: true
+    });
+  } catch (error) {
+    worker.destroy();
+    throw error;
+  }
   let destruction: Promise<void> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let rejectLoading!: (reason: Error) => void;
@@ -54,7 +61,17 @@ export async function openPdf(data: ArrayBuffer, signal: AbortSignal): Promise<P
     if (!destruction) {
       clearTimeout(timer);
       signal.removeEventListener('abort', abort);
-      destruction = Promise.resolve().then(() => task.destroy());
+      // A stuck parser may never acknowledge the graceful transport shutdown.
+      // Own the worker explicitly so close still terminates it after a short grace.
+      destruction = Promise.resolve().then(async () => {
+        let grace: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([task.destroy(), new Promise<void>(resolve => { grace = setTimeout(resolve, 250); })]);
+        } finally {
+          clearTimeout(grace);
+          worker.destroy();
+        }
+      });
     }
     return destruction;
   }
@@ -122,12 +139,8 @@ export async function openPdf(data: ArrayBuffer, signal: AbortSignal): Promise<P
             const part = item.str + (item.hasEOL ? '\n' : ' ');
             const remaining = MAX_PAGE_TEXT_CHARACTERS - text.length;
             if (part.length > remaining) {
-              text += part.slice(0, remaining);
-              // Do not expose half of a UTF-16 surrogate pair at the boundary.
-              if (/[\uD800-\uDBFF]$/.test(text)) text = text.slice(0, -1);
-              truncated = true;
               await reader.cancel();
-              return { text, truncated };
+              throw new Error('Selectable page text exceeds the text-panel limit; the rendered PDF page is not truncated.');
             }
             text += part;
           }

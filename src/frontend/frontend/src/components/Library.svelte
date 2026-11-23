@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { LibrarySearch, searchParams, type SearchCriteria } from '../librarySearch';
   import ItemCard from './ItemCard.svelte';
+  import FileViewer from './FileViewer.svelte';
   import ReextractAction from './ReextractAction.svelte';
   import type { LibraryItem } from '../libraryTypes';
   import EditModal from './EditModal.svelte';
@@ -53,6 +54,7 @@
   let filteredItems: LibraryItem[] = [];
   let loading = false;
   let selectedItem: LibraryItem | null = null;
+  let viewerItem: LibraryItem | null = null;
   let showCard = false;
   let searchQuery = '';
   let searchFocused = false;
@@ -65,7 +67,6 @@
     searchLoaded = state.loaded;
   });
   let editingItem: LibraryItem | null = null;
-  let converting = false;
 
   function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -131,39 +132,8 @@
     search.setQuery('');
   }
 
-  async function openItem(item: LibraryItem) {
-    try {
-      const response = await apiFetch(`${API_BASE_URL}/file/download/${item.Uuid}`);
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      window.open(url, '_blank');
-    } catch (error: unknown) {
-      alert(`Failed to open file: ${errorMessage(error)}`);
-    }
-  }
-
-  async function convertToPdf(item: LibraryItem) {
-    if (!permissions.upload) return;
-    if (item.FileType === '.pdf') {
-      await openItem(item);
-      return;
-    }
-    converting = true;
-    try {
-      const response = await apiFetch(`${API_BASE_URL}/file/convert/${item.Uuid}?format=pdf`, { method: 'POST' });
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || `Conversion failed (${response.status})`);
-      }
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      window.open(url, '_blank');
-    } catch (error: unknown) {
-      alert(`PDF conversion failed: ${errorMessage(error)}`);
-    } finally {
-      converting = false;
-    }
+  function openItem(item: LibraryItem) {
+    viewerItem = item;
   }
 
   function openEditModal(item: LibraryItem) {
@@ -196,9 +166,10 @@
         throw new Error('Received empty file');
       }
 
-      let filename = item.Title || item.Uuid;
-      if (item.FileType && !filename.includes('.')) {
-        filename += `.${item.FileType}`;
+      const extension = item.FileType.replace(/^\.+/, '');
+      let filename = item.OriginalFilename || item.Title || item.Uuid;
+      if (!item.OriginalFilename && extension && !filename.toLowerCase().endsWith(`.${extension.toLowerCase()}`)) {
+        filename += `.${extension}`;
       }
 
       if ('showSaveFilePicker' in window) {
@@ -208,7 +179,7 @@
             types: [{
               description: 'File',
               accept: {
-                [blob.type || 'application/octet-stream']: [`.${item.FileType}`]
+                [blob.type || 'application/octet-stream']: [`.${extension}`]
               }
             }]
           });
@@ -391,7 +362,7 @@
 
   {#if showCard && selectedItem}
     {@const item = selectedItem}
-    <div class="overlay">
+    <div class="overlay" hidden={!!viewerItem}>
       <button
         type="button"
         class="overlay-backdrop"
@@ -510,19 +481,9 @@
       <ReextractAction documentID={item.Uuid} on:updated={({ detail }) => handleReextracted(detail)} />
     {/key}
   {/if}
-  <button class="action-button primary" on:click={() => openItem(item)}>
+  <button class="action-button primary" on:click={() => openItem(item)} disabled={!item.Path}>
     Open
   </button>
-
-  {#if permissions.upload}
-    <button
-      class="action-button accent"
-      on:click={() => convertToPdf(item)}
-      disabled={converting}
-    >
-      {converting ? 'Converting...' : 'View as PDF'}
-    </button>
-  {/if}
 
   {#if permissions.edit}
     <button class="action-button" on:click={() => openEditModal(item)}>
@@ -545,6 +506,12 @@
     </div>
   {/if}
 
+  {#if viewerItem}
+    {#key viewerItem.Uuid}
+      <FileViewer item={viewerItem} on:close={() => viewerItem = null} on:download={({ detail }) => downloadItem(detail)} />
+    {/key}
+  {/if}
+
   {#if editingItem && permissions.edit}
     <EditModal
       item={editingItem}
@@ -555,6 +522,7 @@
 </div>
 
 <style>
+  .overlay[hidden] { display: none; }
   .library-container {
     height: 100%;
     position: relative;
@@ -905,15 +873,6 @@
     background: #0056CC;
   }
 
-  .action-button.accent {
-    background: rgba(88, 86, 214, 0.2);
-    color: #5856D6;
-  }
-
-  .action-button.accent:hover:not(:disabled) {
-    background: rgba(88, 86, 214, 0.35);
-  }
-
   .action-button.danger {
     background: rgba(255, 59, 48, 0.15);
     color: #FF3B30;
@@ -923,12 +882,12 @@
     background: rgba(255, 59, 48, 0.3);
   }
 
-  .action-button:not(.primary):not(.accent):not(.danger) {
+  .action-button:not(.primary):not(.danger) {
     background: rgba(255, 255, 255, 0.1);
     color: #ffffff;
   }
 
-  .action-button:not(.primary):not(.accent):not(.danger):hover {
+  .action-button:not(.primary):not(.danger):hover {
     background: rgba(255, 255, 255, 0.2);
   }
 

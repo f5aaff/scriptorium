@@ -3,6 +3,8 @@
   import { loadPreview, type LoadedPreview } from '../preview';
   import type { LibraryItem } from '../libraryTypes';
   import PdfView from './PdfView.svelte';
+  import TextReader from './TextReader.svelte';
+  import { ReadingSession, type ReadingPosition, type ReadingStatus } from '../readingState';
 
   export let item: LibraryItem;
   const dispatch = createEventDispatcher<{ close: void; download: LibraryItem }>();
@@ -14,6 +16,33 @@
   let loading = true;
   let error = '';
   let mediaFailed = false;
+  let mediaReady = false;
+  let disposed = false;
+  let closing = false;
+  let initialPosition: ReadingPosition | null = null;
+  let placeStatus: ReadingStatus = { loading: true, saving: false, saved: false, error: '' };
+  const reading = new ReadingSession(item.Uuid, status => placeStatus = status);
+
+  async function closeViewer() {
+    if (closing) return;
+    closing = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([reading.flush(true), new Promise<void>(resolve => { timer = setTimeout(resolve, 1500); })]);
+    clearTimeout(timer);
+    if (!disposed) dispatch('close');
+  }
+  function restoreMedia(event: Event) {
+    const media = event.currentTarget as HTMLMediaElement;
+    if (initialPosition && initialPosition.kind === preview?.kind) {
+      media.currentTime = Math.min(initialPosition.offset, Number.isFinite(media.duration) ? media.duration : initialPosition.offset);
+    }
+    mediaReady = true;
+  }
+  function captureMedia(event: Event) {
+    if (!mediaReady || (preview?.kind !== 'audio' && preview?.kind !== 'video')) return;
+    const media = event.currentTarget as HTMLMediaElement;
+    if (Number.isFinite(media.currentTime)) reading.update({ kind: preview.kind, page: 0, offset: media.currentTime, scale: 1 });
+  }
 
   function revokeObjectURL() {
     if (objectURL) URL.revokeObjectURL(objectURL);
@@ -28,10 +57,12 @@
     preview = null;
     error = '';
     mediaFailed = false;
+    mediaReady = false;
     loading = true;
     try {
-      const result = await loadPreview(item.Uuid, current.signal);
+      const [result] = await Promise.all([loadPreview(item.Uuid, current.signal), reading.load(current.signal)]);
       if (current.signal.aborted || request !== current) return;
+      initialPosition = reading.position;
       if (result.kind !== 'text' && result.kind !== 'pdf') {
         objectURL = URL.createObjectURL(new Blob([result.data], { type: result.mediaType }));
       }
@@ -47,7 +78,7 @@
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
-      dispatch('close');
+      void closeViewer();
     } else if (event.key === 'Tab') {
       const controls = Array.from(dialog.querySelectorAll<HTMLElement>(
         'button:not([disabled]), input:not([disabled]), audio[controls], video[controls], textarea:not([disabled]), [tabindex="0"]'
@@ -69,11 +100,16 @@
     const previousFocus = document.activeElement;
     closeButton.focus();
     window.addEventListener('keydown', handleKey);
+    const flushPlace = () => { void reading.flush(true); };
+    window.addEventListener('pagehide', flushPlace);
     void load();
     return () => {
+      disposed = true;
       request?.abort();
+      reading.close();
       revokeObjectURL();
       window.removeEventListener('keydown', handleKey);
+      window.removeEventListener('pagehide', flushPlace);
       // Let the parent reveal the underlying details before restoring focus.
       queueMicrotask(() => {
         if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
@@ -90,8 +126,16 @@
         <p>{item.OriginalFilename || item.FileType}</p>
       </div>
       <button on:click={() => dispatch('download', item)}>Download original</button>
-      <button bind:this={closeButton} on:click={() => dispatch('close')}>Close viewer</button>
+      <button bind:this={closeButton} on:click={closeViewer} disabled={closing}>{closing ? 'Closing…' : 'Close viewer'}</button>
     </header>
+    {#if preview && preview.kind !== 'image'}
+      <div class="place-status">
+        {#if placeStatus.error}
+          <p role="alert">Place not saved: {placeStatus.error}</p>
+          <button on:click={() => reading.retry()}>Save my current place</button>
+        {:else}<p role="status">{placeStatus.saving ? 'Saving place…' : placeStatus.saved ? 'Place saved' : 'Place saves automatically'}</p>{/if}
+      </div>
+    {/if}
     <div class="content" aria-busy={loading}>
       {#if loading}<p role="status">Loading file preview…</p>{/if}
       {#if error}
@@ -100,21 +144,19 @@
       {/if}
       {#if preview}
         {#if preview.kind === 'pdf'}
-          <PdfView data={preview.data} />
+          <PdfView data={preview.data} {initialPosition} on:position={({ detail }) => reading.update(detail)} />
         {:else if preview.kind === 'text'}
-          {#if preview.truncated}<p role="status">Showing the first 1 MiB of text. Download the original for the complete file.</p>{/if}
-          <p class="hint">Source text only: markup, scripts, and external resources are not executed.</p>
-          <textarea readonly aria-label="File source text" class="source-text" rows="20" value={preview.text} placeholder="(Empty text file)"></textarea>
+          <TextReader text={preview.text} {initialPosition} on:position={({ detail }) => reading.update(detail)} />
         {:else if mediaFailed}
           <p role="alert">Your browser could not decode this file or codec. Download the original instead.</p>
         {:else if preview.kind === 'image'}
           <img src={objectURL} alt={item.Title || item.OriginalFilename || 'Library image'} on:error={() => mediaFailed = true} />
         {:else if preview.kind === 'audio'}
-          <audio controls src={objectURL} preload="metadata" on:error={() => mediaFailed = true}>Your browser does not support audio playback.</audio>
+          <audio controls src={objectURL} preload="metadata" on:loadedmetadata={restoreMedia} on:timeupdate={captureMedia} on:pause={captureMedia} on:error={() => mediaFailed = true}>Your browser does not support audio playback.</audio>
         {:else if preview.kind === 'video'}
           <!-- Uploaded originals do not yet have associated caption tracks. -->
           <!-- svelte-ignore a11y-media-has-caption -->
-          <video controls playsinline src={objectURL} preload="metadata" on:error={() => mediaFailed = true}>Your browser does not support video playback.</video>
+          <video controls playsinline src={objectURL} preload="metadata" on:loadedmetadata={restoreMedia} on:timeupdate={captureMedia} on:pause={captureMedia} on:error={() => mediaFailed = true}>Your browser does not support video playback.</video>
         {/if}
       {/if}
     </div>
@@ -130,12 +172,11 @@
   p { margin: 10px 0; }
   header p { font-size: .85rem; color: #bbb; }
   button { background: #303036; color: white; border: 1px solid #777; border-radius: 6px; padding: 10px; cursor: pointer; }
-  button:focus-visible, textarea:focus-visible { outline: 2px solid #64aaff; outline-offset: 2px; }
+  button:focus-visible { outline: 2px solid #64aaff; outline-offset: 2px; }
   .content { padding: 16px; overflow: auto; min-height: 120px; min-width: 0; }
   img, video { display: block; max-width: 100%; max-height: 70vh; margin: auto; object-fit: contain; }
   audio { width: 100%; }
-  .source-text { display: block; width: 100%; max-height: 65vh; padding: 12px; box-sizing: border-box; resize: vertical; white-space: pre-wrap; font-family: monospace; color: #eee; background: #17171b; border: 1px solid #666; }
+  .place-status { padding: 0 16px; }
   [role="alert"] { color: #ffb5b5; }
-  .hint { color: #bbb; font-size: .85rem; }
   @media (max-width: 600px) { .viewer-overlay { padding: 4px; } .viewer { max-height: 99vh; } }
 </style>

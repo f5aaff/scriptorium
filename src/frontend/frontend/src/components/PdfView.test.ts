@@ -62,6 +62,11 @@ it('cancels a previous page text read when changing pages', async () => {
   expect(screen.queryByText('stale page text')).toBeNull();
 });
 
+it('restores a saved PDF page and zoom before rendering the document', async () => {
+  render(PdfView, { data: new ArrayBuffer(0), initialPosition: { kind: 'pdf', page: 2, offset: .3, scale: 1.5 } });
+  await waitFor(() => expect(document.renderPage).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 2, 1.5, expect.any(AbortSignal)));
+});
+
 it('offers a useful fallback for password-protected PDFs', async () => {
   vi.mocked(openPdf).mockRejectedValue(Object.assign(new Error('password'), { name: 'PasswordException' }));
   render(PdfView, { data: new ArrayBuffer(0) });

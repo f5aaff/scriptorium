@@ -57,6 +57,49 @@ src/
 - Directory imports are available only below administrator-configured `IMPORT_ROOTS`; the API accepts a root ID and relative path, never an arbitrary server filesystem path. Symlink entries inside imported trees are skipped.
 - Batch source files are staged below `STORAGE_PATH/.jobs` with restrictive permissions before the job is committed to the queue.
 
+### In-app reader — work in progress
+
+Use **Open** in document details without leaving Scriptorium. Reading and saving
+a personal place are available to every authenticated account, including read-only
+accounts; neither requires upload or catalogue-edit permission.
+
+**The full-format reader milestone is not finished.** Current coverage is:
+
+| Format | Current reading experience |
+| --- | --- |
+| PDF | Complete document with paging, page jumps, zoom and a selectable-text panel; resumes page, zoom and within-page scroll |
+| UTF-8 text | Complete text, paginated into selectable sections without dropping characters; resumes section and scroll |
+| Markdown, HTML, CSV, XML, reStructuredText, logs | Complete inert source text where detected as UTF-8; formatted/structured readers still outstanding |
+| Signature-recognized raster images | Native image view |
+| Signature-recognized audio/video | Native controls with saved playback time; codecs depend on the browser/WebView |
+| EPUB, Word, Excel, PowerPoint, OpenDocument and RTF | Proper renderers still outstanding; download-only is not counted as reader support |
+
+PDF.js, its worker, fonts and decoders are bundled locally. No Poppler, Pandoc or
+CDN is required to read a PDF. PDF scripts, XFA, interactive forms and links are
+not activated; password entry is not implemented. Embedded images are not
+intentionally omitted, although large pages/decoded images may be scaled. The
+optional selectable-text panel has a resource limit and reports a failure rather
+than presenting a truncated prefix as complete; it does not truncate the PDF.
+
+The old **View as PDF** action is replaced by **Open**. The explicit Pandoc API
+remains experimental and is not automatically invoked by the current reader.
+Reader inputs share the 100 MiB ingestion limit. The API supports HEAD and byte
+ranges, but this initial client buffers the original before displaying it; text
+pagination limits DOM/layout work, not network transfer. It is not a streaming
+media player. PDF parsing and page rendering have best-effort 30-second deadlines.
+Input/canvas limits are not hard decoder-memory or CPU bounds; see `SECURITY.md`.
+
+Saved places live in SQLite under a stable account ID and document UUID. They
+survive server/browser restarts and ordinary metadata edits. New accounts never
+inherit places from a deleted account with the same username. Saves are serial,
+checkpoint continuous activity approximately once per second, and flush on close
+or page hide. Optimistic versions prevent a stale window from silently replacing
+a newer place. Errors remain visible; **Save my current place** is an explicit
+choice to retry using this window's position. Network/forced-process failures can
+still lose activity since the last acknowledged checkpoint; there is no offline
+pending-save queue yet. Legacy originals without hashes use their stored identity
+fields, not a newly calculated content digest, to bind reading state.
+
 ### Storage safety
 
 - Storage operations reject absolute paths and parent-directory traversal.
@@ -96,7 +139,7 @@ These are explicit remaining product milestones, not implied capabilities:
 1. Automatic watch-folder monitoring, import cancellation/retry controls, and a configured-directory import UI.
 2. PDF metadata extraction, OCR, bulk/background reprocessing, and metadata/text extraction for EPUB, Office and other binary document formats.
 3. Full Dewey schedules and a richer classification workflow, including review queues and user overrides in the UI.
-4. Embedded PDF, EPUB, text, image, audio and video readers.
+4. EPUB/Office readers, formatted Markdown, streaming media, caption tracks, PDF annotations/password entry, and offline pending-place synchronization.
 5. Multi-user accounts, roles, sharing permissions and stronger account recovery.
 6. Backup/restore, structured audit logging, monitoring and isolated conversion workers.
 7. CI, dependency vulnerability gates, reproducible builds, integration tests and release packaging.
@@ -105,7 +148,8 @@ These are explicit remaining product milestones, not implied capabilities:
 
 - Go 1.23 or later.
 - CGO enabled and a working C compiler (GCC or Clang; Xcode Command Line Tools on macOS).
-- Node.js 20.19+ or 22.12+ (a supported LTS release is recommended) and npm.
+- Node.js 22.13 or later (a supported LTS release is recommended) and npm.
+- A modern ES2022-capable browser/WebView with module workers for the file viewer.
 - Poppler's `pdftotext` is optional and needed for PDF text extraction (installation below).
 - Pandoc is optional and only needed for document conversions that Pandoc supports.
 - Wails v2 CLI for the desktop build.
@@ -248,10 +292,28 @@ npm run check
 npm run build
 ```
 
+`predev` and `prebuild` copy the installed PDF.js fonts, CMaps and decoder assets
+into the generated `public/pdfjs/` directory; do not edit that directory. The PDF
+engine is lazy-loaded only when opening a PDF. Wails and browser distributions
+include the same local viewer assets.
+
 Vitest runs query/pagination unit tests and Svelte component tests in jsdom.
 Search tests cover field filters across pages, stale responses, debounce and
 navigation cleanup, retrying failed pages, and loading/error/empty states.
 CI runs these tests alongside the backend tests and frontend checks.
+
+Run the production-bundle viewer smoke tests with Chromium:
+
+```bash
+cd src/frontend/frontend
+npx playwright install chromium # use --with-deps on a fresh Linux CI host
+npm run test:browser
+```
+
+These tests use mocked API responses with real browser rendering: two-page PDF
+navigation, local font loading, inert PDF actions/markup, worker teardown,
+image/audio decoding, codec fallback, focus restoration and original downloads.
+They do not replace backend authorization tests or native Wails platform testing.
 
 ## Desktop development
 
@@ -302,7 +364,9 @@ wails build
 | `GET` | `/file/imports/roots` | List configured import-root IDs and display names |
 | `POST` | `/file/imports/directory` | Queue a directory/file import using `{ "root_id": "…", "path": "relative/path" }` |
 | `GET` | `/file/download/:uuid` | Download the original file |
-| `POST` | `/file/convert/:uuid` | Convert supported document formats with Pandoc |
+| `GET`, `HEAD` | `/file/preview/:uuid` | Authenticated, signature-checked inline preview; supports byte ranges, rejects unsupported formats and inputs over 100 MiB |
+| `GET`, `PUT` | `/file/reading-state/:uuid` | Load/save the session account's private place; PUT requires source revision and expected version, but no catalogue-edit permission |
+| `POST` | `/file/convert/:uuid` | Experimental explicit Pandoc conversion; not used by the reader |
 | `POST` | `/file/reextract/:uuid` | Re-extract one stored original and refresh indexed text (`edit` permission) |
 
 Job details include a `results` array when per-file outcomes are available. Each

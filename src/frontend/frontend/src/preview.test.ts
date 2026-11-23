@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiFetch } from './api';
-import { loadPreview, MAX_PREVIEW_BYTES, MAX_TEXT_PREVIEW_BYTES } from './preview';
+import { loadPreview, MAX_PREVIEW_BYTES } from './preview';
 
 vi.mock('./api', () => ({ apiFetch: vi.fn() }));
 beforeEach(() => vi.mocked(apiFetch).mockReset());
@@ -10,7 +10,7 @@ describe('preview loading boundary', () => {
   it('authenticates through apiFetch and returns inert text', async () => {
     vi.mocked(apiFetch).mockResolvedValue(new Response('<script>alert(1)</script>', { headers: headers('text', 'text/plain; charset=utf-8') }));
     const signal = new AbortController().signal;
-    expect(await loadPreview('a/b', signal)).toEqual({ kind: 'text', text: '<script>alert(1)</script>', truncated: false });
+    expect(await loadPreview('a/b', signal)).toEqual({ kind: 'text', text: '<script>alert(1)</script>' });
     expect(apiFetch).toHaveBeenCalledWith(expect.stringContaining('/file/preview/a%2Fb'), { signal });
   });
 
@@ -23,14 +23,13 @@ describe('preview loading boundary', () => {
     expect(response.body?.locked).toBe(false);
   });
 
-  it('truncates text at a valid UTF-8 boundary and cancels the remainder', async () => {
-    const source = 'a'.repeat(MAX_TEXT_PREVIEW_BYTES - 1) + 'é and more';
+  it('loads complete text beyond the old 1 MiB preview boundary', async () => {
+    const source = 'a'.repeat(1024 * 1024 - 1) + 'é and the complete ending';
     vi.mocked(apiFetch).mockResolvedValue(new Response(source, { headers: headers('text', 'text/plain') }));
     const preview = await loadPreview('id', new AbortController().signal);
     expect(preview.kind).toBe('text');
     if (preview.kind === 'text') {
-      expect(preview.truncated).toBe(true);
-      expect(preview.text).toBe('a'.repeat(MAX_TEXT_PREVIEW_BYTES - 1));
+      expect(preview.text).toBe(source);
     }
   });
 

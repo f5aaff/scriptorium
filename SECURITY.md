@@ -37,6 +37,76 @@ multiple accounts, roles, sharing permissions, or per-document authorization.
 - File storage uses generated storage keys and validates local paths, rejecting
   traversal and symlink components.
 
+## In-app viewer boundary
+
+`GET`/`HEAD /file/preview/:uuid` requires an authenticated session, including for
+range requests, and accepts only a catalogue UUID. Originals are opened through
+the root-confined storage abstraction. A 512-byte signature check, not editable
+metadata or a filename extension, chooses an allowlisted response type. Files
+over 100 MiB and unrecognized binary types are rejected. HTML, XML and SVG are
+served only as inert plain text, with `nosniff`, no-store and a restrictive sandbox
+CSP that disallows framing. Signature detection is not full file validation or a
+malware scan; previewing does not verify the stored SHA-256 digest.
+
+The client fetches through the authenticated API helper without putting tokens
+in URLs. It checks the preview-kind/MIME allowlist again, bounds actual streamed
+bytes even without a trustworthy Content-Length. Complete UTF-8 text is loaded
+up to the shared 100 MiB input limit, with only one character-preserving section
+laid out at a time; it is never silently prefix-truncated. Source text is assigned
+as text, never injected as HTML. Originals are fully buffered in this first
+client, then passed to
+PDF.js as bytes or to native image/audio/video elements via local object URLs.
+No uploaded document is embedded as HTML or loaded in an iframe/object element.
+
+PDF.js is bundled locally, with no CDN resources. The wrapper instantiates no
+scripting manager, ships no optional QuickJS evaluator, disables XFA and
+annotation rendering, and never follows PDF links or activates forms/actions.
+Parsing has a 30-second deadline after the PDF engine loads. Each page render
+has a best-effort 30-second deadline, with at most 16 Mi canvas pixels and an
+8,192-pixel maximum dimension. Embedded images are not deliberately omitted,
+although PDF.js may downscale them for rendering. The optional selectable-text
+panel fails explicitly above 1 Mi UTF-16 characters rather than claiming its
+prefix is complete; PDF canvas content is not truncated. Closing the viewer
+aborts requests/rendering, allows 250 ms for graceful PDF shutdown before
+destroying its owned worker, and revokes local
+object URLs. The application CSP permits local workers/fonts and WebAssembly
+compilation (`wasm-unsafe-eval`) for the bundled image decoders, but not JavaScript
+`unsafe-eval` or uploaded scripts.
+
+Encoded-input/canvas bounds do **not** impose hard decoder-memory or CPU limits,
+prevent all decompression bombs, or constitute an OS sandbox. Malformed PDFs,
+fonts, images and codecs exercise complex client parsers. Keep PDF.js, browsers
+and native Wails WebViews patched; downloads and successful previews are not
+assurances that an original is safe to open elsewhere. Wails codec/worker support
+is platform-dependent. Pandoc conversion remains a separate experimental API;
+the viewer never invokes it automatically.
+
+## Personal reading-state boundary
+
+Reading state is separate from catalogue metadata and is keyed by the authenticated
+account's persistent UUID, never a request-selected username/account. Legacy auth
+files receive atomically persisted UUIDs before sessions are accepted; password
+and permission changes preserve them, while username recreation assigns a new
+identity. Deleted accounts' inaccessible position rows are not currently purged.
+These positions are not encrypted at rest, and host/database administrators can
+read them.
+
+GET and PUT require a session; cookie PUTs require CSRF protection. Read-only
+accounts may save their own places without catalogue-edit permission. JSON bodies
+are capped at 8 KiB, reject unknown properties, and validate finite bounded
+coordinates. Source-revision and optimistic-version checks prevent stale saves
+from replacing newer positions or binding to a changed original. Document deletion
+cascades state deletion; saving cannot resurrect a deleted record. Ordinary title,
+classification and extraction edits do not invalidate a place. Legacy originals
+without digests use managed ingestion identity fields; external in-place changes
+to such files are not detected by that revision mechanism.
+
+The client serializes/throttles saves and reports failures rather than silently
+retrying conflicts. A user can explicitly choose the current window's place over
+a newer save. Close/page-hide flushing is best-effort: abrupt termination or lost
+connectivity can lose changes after the last acknowledged checkpoint. An offline
+pending-save queue is not implemented.
+
 ## PDF extraction boundary
 
 PDF text extraction invokes the optional Poppler `pdftotext` executable directly,

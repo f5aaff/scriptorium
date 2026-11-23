@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -69,6 +70,35 @@ func TestDeletingDocumentCascadesReadingStateWithoutResurrection(t *testing.T) {
 	var count int
 	if err := db.db.QueryRow(`SELECT COUNT(*) FROM reading_positions`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("orphaned state: %d %v", count, err)
+	}
+}
+
+func TestReadingStateSurvivesDatabaseRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "library.sqlite")
+	db := &SQLiteDAO{}
+	params := &SQLiteConnectionParams{Path: path, Mode: 0600}
+	if err := db.Connect(params); err != nil {
+		t.Fatal(err)
+	}
+	metadata, _ := extractionFixture(t, db)
+	state, err := db.ReadReadingState(context.Background(), "account", metadata.Uuid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := ReadingPosition{Kind: "pdf", Page: 45, Scale: 1.5, Offset: .4}
+	if _, err := db.SaveReadingState(context.Background(), "account", metadata.Uuid, state.SourceRevision, 0, position); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Connect(params); err != nil {
+		t.Fatal(err)
+	}
+	defer db.db.Close()
+	restored, err := db.ReadReadingState(context.Background(), "account", metadata.Uuid)
+	if err != nil || restored.Position == nil || *restored.Position != position || restored.Version != 1 {
+		t.Fatalf("restart lost saved place: %#v %v", restored, err)
 	}
 }
 

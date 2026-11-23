@@ -77,6 +77,12 @@ jobs:
       - name: Run frontend tests
         run: cd src/frontend/frontend && npm test
 
+      - name: Run browser viewer smoke tests
+        run: |
+          cd src/frontend/frontend
+          npx playwright install --with-deps chromium
+          npm run test:browser
+
       - name: Build all distributions
         run: make build
 

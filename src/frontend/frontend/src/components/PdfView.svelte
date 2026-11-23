@@ -1,9 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { createEventDispatcher, onMount, tick } from 'svelte';
+  import type { ReadingPosition } from '../readingState';
   import { openPdf, type PdfDocument } from '../pdfRenderer';
 
   export let data: ArrayBuffer;
+  export let initialPosition: ReadingPosition | null = null;
+  const dispatch = createEventDispatcher<{ position: ReadingPosition }>();
   let canvas: HTMLCanvasElement;
+  let pageViewport: HTMLDivElement;
   let pdf: PdfDocument | undefined;
   let page = 1;
   let requestedPage = 1;
@@ -23,7 +27,17 @@
   let renderTimer: ReturnType<typeof setTimeout> | undefined;
   let textTimer: ReturnType<typeof setTimeout> | undefined;
 
-  async function renderCurrent() {
+  function scrollFraction() {
+    const distance = pageViewport.scrollHeight - pageViewport.clientHeight;
+    return distance > 0 ? Math.min(1, Math.max(0, pageViewport.scrollTop / distance)) : 0;
+  }
+
+  function capturePosition(force = false) {
+    if (!pdf || lifetime.signal.aborted || (busy && !force)) return;
+    dispatch('position', { kind: 'pdf', page, offset: scrollFraction(), scale: zoom });
+  }
+
+  async function renderCurrent(offset = 0) {
     if (!pdf || lifetime.signal.aborted) return;
     rendering?.abort();
     readingText?.abort();
@@ -48,7 +62,12 @@
     renderTimer = timer;
     try {
       const scale = await pdf.renderPage(canvas, page, zoom, request.signal);
-      if (!request.signal.aborted && !lifetime.signal.aborted) actualScale = scale;
+      if (!request.signal.aborted && !lifetime.signal.aborted) {
+        actualScale = scale;
+        await tick();
+        pageViewport.scrollTop = offset * Math.max(0, pageViewport.scrollHeight - pageViewport.clientHeight);
+        capturePosition(true);
+      }
     } catch {
       if (!request.signal.aborted && !lifetime.signal.aborted) {
         error = 'This PDF page could not be rendered. Download the original instead.';
@@ -67,8 +86,9 @@
 
   function changeZoom(next: number) {
     if (busy || !pdf) return;
+    const offset = scrollFraction();
     zoom = Math.max(.5, Math.min(3, next));
-    void renderCurrent();
+    void renderCurrent(offset);
   }
 
   async function toggleText() {
@@ -104,7 +124,10 @@
       if (lifetime.signal.aborted) { await document.destroy(); return; }
       pdf = document;
       pages = pdf.pageCount;
-      await renderCurrent();
+      const saved = initialPosition?.kind === 'pdf' ? initialPosition : null;
+      page = requestedPage = Math.min(pages, Math.max(1, saved?.page || 1));
+      zoom = Math.max(.5, Math.min(3, saved?.scale || 1));
+      await renderCurrent(saved?.offset || 0);
     }).catch(failure => {
       if (lifetime.signal.aborted) return;
       error = failure?.name === 'PasswordException'
@@ -140,7 +163,7 @@
   {#if busy}<p role="status">Loading PDF page…</p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
   {#if actualScale < zoom && !busy}<p>Large page scaled down to stay within render limits.</p>{/if}
-  <div class="page" hidden={!!error} role="img" aria-label={`PDF page ${page}`}>
+  <div bind:this={pageViewport} class="page" hidden={!!error} role="img" aria-label={`PDF page ${page}`} on:scroll={() => capturePosition()}>
     <canvas bind:this={canvas} width="1" height="1" aria-hidden="true"></canvas>
   </div>
   {#if textVisible}
@@ -153,7 +176,7 @@
       {/if}
     </section>
   {/if}
-  <p class="hint">Use “Show page text” for selectable text. Large pages and images are limited for safety; download the original if rendering appears incomplete. PDF scripts, forms, and links are not activated.</p>
+  <p class="hint">Use “Show page text” for selectable text. Large pages are scaled to fit the canvas limit; embedded images are not deliberately omitted. PDF scripts, forms, and links are not activated.</p>
 </section>
 
 <style>
