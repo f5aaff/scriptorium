@@ -215,10 +215,24 @@ func (s *SQLiteDAO) putMetadataWithDuplicateHashPolicy(m MetaData, insertOnly, a
 	if _, err := uuid.Parse(m.Uuid); err != nil {
 		return fmt.Errorf("invalid document UUID %q: %w", m.Uuid, err)
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin document transaction: %w", err)
+	}
+	defer tx.Rollback()
 	oldHash := ""
 	if !insertOnly {
-		if err := s.db.QueryRow(`SELECT extracted_text, sha256 FROM documents WHERE id = ?`, m.Uuid).Scan(&m.ExtractedText, &oldHash); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		var raw string
+		err := tx.QueryRow(`SELECT extracted_text, sha256, metadata_json FROM documents WHERE id = ?`, m.Uuid).Scan(&m.ExtractedText, &oldHash, &raw)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("read existing document fields: %w", err)
+		}
+		if err == nil {
+			var current MetaData
+			if err := json.Unmarshal([]byte(raw), &current); err != nil {
+				return fmt.Errorf("decode existing document fields: %w", err)
+			}
+			preserveExtractionFields(&m, current)
 		}
 	}
 	encoded, err := json.Marshal(m)
@@ -226,11 +240,6 @@ func (s *SQLiteDAO) putMetadataWithDuplicateHashPolicy(m MetaData, insertOnly, a
 		return fmt.Errorf("encode document metadata: %w", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin document transaction: %w", err)
-	}
-	defer tx.Rollback()
 	query := `INSERT INTO documents(id, metadata_json, search_text, extracted_text, sha256, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)`
 	if !insertOnly {
 		query += ` ON CONFLICT(id) DO UPDATE SET metadata_json=excluded.metadata_json, search_text=excluded.search_text, extracted_text=excluded.extracted_text, sha256=excluded.sha256, updated_at=excluded.updated_at`
@@ -301,7 +310,7 @@ func (s *SQLiteDAO) ReadRaw(id uuid.UUID) ([]byte, error) {
 	var raw string
 	if err := s.db.QueryRow(`SELECT metadata_json FROM documents WHERE id = ?`, id.String()).Scan(&raw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("document not found: %s", id)
+			return nil, fmt.Errorf("%w: %s", ErrDocumentNotFound, id)
 		}
 		return nil, fmt.Errorf("read document metadata: %w", err)
 	}
