@@ -158,6 +158,23 @@ func TestPreviewFileRejectsMissingAndInvalidRecords(t *testing.T) {
 	}
 }
 
+func TestViewerSecurityPolicyAllowsLocalRenderingWithoutJavaScriptEval(t *testing.T) {
+	router := gin.New()
+	router.Use(securityHeaders(nil))
+	router.GET("/", func(c *gin.Context) { c.String(200, "frontend") })
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest("GET", "/", nil))
+	policy := response.Header().Get("Content-Security-Policy")
+	for _, directive := range []string{"worker-src 'self' blob:", "font-src 'self' data: blob:", "'wasm-unsafe-eval'", "object-src 'none'"} {
+		if !strings.Contains(policy, directive) {
+			t.Fatalf("viewer resources blocked by policy: %s", policy)
+		}
+	}
+	if strings.Contains(policy, "'unsafe-eval'") {
+		t.Fatalf("JavaScript eval was enabled: %s", policy)
+	}
+}
+
 func TestPreviewFileRequiresSessionAndExposesRangeHeadersToAllowedClients(t *testing.T) {
 	handler, metadata := previewFixture(t, "%PDF-1.7\nfixture")
 	manager, err := auth.NewManager(filepath.Join(t.TempDir(), "auth.json"), "owner", "a-secure-test-password", false)

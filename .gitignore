@@ -21,3 +21,8 @@ scriptorium-auth.json
 *.sqlite-shm
 *.db.bolt.bak
 *.sqlite-migration*
+
+# Generated PDF.js assets and browser-test output
+/src/frontend/frontend/public/pdfjs/
+/src/frontend/frontend/test-results/
+/src/frontend/frontend/playwright-report/

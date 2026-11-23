@@ -820,7 +820,7 @@ func securityHeaders(allowedOrigins []string) gin.HandlerFunc {
 	for _, origin := range allowedOrigins {
 		connectSources = append(connectSources, origin)
 	}
-	contentSecurityPolicy := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src " + strings.Join(connectSources, " ") + "; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+	contentSecurityPolicy := "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; font-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src " + strings.Join(connectSources, " ") + "; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 	return func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-Frame-Options", "DENY")
